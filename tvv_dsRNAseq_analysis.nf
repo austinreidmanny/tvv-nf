@@ -123,27 +123,16 @@ process mapToTVV {
     """
 }
 
-process prepFilesForConversion {
-    input:
-    file fastq from binned_fastq_ch.flatten()
-
-    output:
-    tuple val(fastq.baseName), file(fastq) into binned_fastq_with_names
-
-    """
-    """
-}
-
 process fastqToFasta {
     publishDir "${output_directory}/analysis/03_binned_reads/fasta/", mode: "copy"
 
     input:
-    tuple name, file(binned_fastq) from binned_fastq_with_names
+    file fastq from binned_fastq_ch.flatten()
 
     output:
     file "*fasta"
 
     """
-    seqtk seq -A $binned_fastq > ${name}.fasta
+    seqtk seq -A $fastq > ${fastq.baseName}.fasta
     """
 }

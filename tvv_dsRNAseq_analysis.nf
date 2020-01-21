@@ -2,9 +2,9 @@
 
 // Setup default parameters if not provided any
 params.sampleName = "123414"
-params.reads = "input_reads/*sub*{1,2}.fastq.gz"
+params.reads = "input_reads/123414.R{1,2}.fastq.gz"
 params.outputDirectory = "output/"
-params.phiX = "genomes/phiX.fasta"
+params.phix = "genomes/phiX.fasta"
 params.tvvDir = "genomes/"
 
 // Read in the parameters as usable variables
@@ -16,13 +16,15 @@ tvv_directory = params.tvvDir
 paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true )
 
 // Read in phiX genome for depletion
-phiX_ch = Channel.fromPath( params.phiX, checkIfExists: true )
+phiX_ch = Channel.fromPath( params.phix, checkIfExists: true )
 
 // Read in the TVV reference genomes for mapping & binning
-tvv_ch = Channel.fromPath( "${tvv_directory}/tvv*.fasta", checkIfExists: true )
-
-// Split it into one input channel per set of sequences
-tvv_ch.into { tvv1_ch; tvv2_ch; tvv3_ch; tvv4_ch; tvv5_ch; tvv_sats_ch }
+tvv1_ch = Channel.fromPath("${tvv_directory}/tvv1.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
+tvv2_ch = Channel.fromPath("${tvv_directory}/tvv2.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
+tvv3_ch = Channel.fromPath("${tvv_directory}/tvv3.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
+tvv4_ch = Channel.fromPath("${tvv_directory}/tvv4.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
+tvv5_ch = Channel.fromPath("${tvv_directory}/tvv5.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
+tvv_sats_ch = Channel.fromPath("${tvv_directory}/tvv-dsRNA-satellites.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
 
 // Trim adapters from the reads
 process trimAdapters {
@@ -59,6 +61,7 @@ process depletePhiX {
     file "*phiX_depleted*.R2.fq.gz" into phiX_depleted_reverse_reads
     file "*phiX.stats.txt"
     file "*phiX.counts.txt"
+
     """
     # Build BWA index out of the reference
     bwa index \
@@ -102,15 +105,15 @@ process mapToTVV {
     input:
     file forward_reads from phiX_depleted_forward_reads
     file reverse_reads from phiX_depleted_reverse_reads
-    file tvv1 name "tvv1.fasta" from tvv1_ch
-    file tvv2 name "tvv2.fasta" from tvv2_ch
-    file tvv3 name "tvv3.fasta" from tvv3_ch
-    file tvv4 name "tvv4.fasta" from tvv4_ch
-    file tvv5 name "tvv5.fasta" from tvv5_ch
-    file tvv_satellites name "tvv-dsRNA-satellites.fasta" from tvv_sats_ch
+    tuple tvv_species, file(tvv1) from tvv1_ch
+    tuple tvv_species, file(tvv2) from tvv2_ch
+    tuple tvv_species, file(tvv3) from tvv3_ch
+    tuple tvv_species, file(tvv4) from tvv4_ch
+    tuple tvv_species, file(tvv5) from tvv5_ch
+    tuple tvv_species, file(tvv_satellites) from tvv_sats_ch
 
     output:
-    file "${sample_name}_tvv*.fq" into binned_fastq_ch
+    file "${sample_name}_tvv*fq" into binned_tvv, binned_tvv_fastq
 
     """
     bbsplit.sh \
@@ -127,12 +130,110 @@ process fastqToFasta {
     publishDir "${output_directory}/analysis/03_binned_reads/fasta/", mode: "copy"
 
     input:
-    file fastq from binned_fastq_ch.flatten()
+    file fastq from binned_tvv_fastq.flatten()
 
     output:
-    file "*fasta"
+    file "${sample_name}_tvv*.fasta"
 
     """
-    seqtk seq -A $fastq > ${fastq.baseName}.fasta
+    seqtk seq -A $fastq > "${fastq.simpleName}.fasta"
     """
 }
+
+
+process deNovoAssembly {
+    //publishDir "${output_directory}/analysis/04_denovoassembly/", mode: "copy"
+    //publishDir pattern: "transcripts.fasta", saveAs: "${output_directory}analysis/04_denovoassembly/${reads.getSimpleName()}.transcripts.fasta", mode: "copy"
+
+    publishDir path: "${output_directory}/analysis/04_denovoassembly", pattern: "transcripts.fasta", mode: "copy", saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+
+
+    input:
+    file reads from binned_tvv.flatten()//.filter{ it.size() > 0 }
+
+    output:
+    tuple file("transcripts.fasta"), file(reads) into tvv_contigs
+
+    """
+    # Assemble viral reads into viral genomes or partial contigs
+    rnaspades.py -s $reads -o ./ || touch transcripts.fasta
+    """
+}
+
+/*
+// Map the TVV-reads to the denovo-assembled-contigs with BWA
+process mapReadsToContigs {
+    publishDir "${output_directory}/analysis/05_refinement/mapping/", mode: "copy"
+
+    input:
+    tuple val(tvv_species), file(contigs), file(reads) from tvv_contigs.flatten().filter{ it[2].size() > 0 }
+
+    output:
+    tuple val(tvv_species), file("reads_mapped_to_contigs.sorted.bam"), file(contigs), file(reads) into mapped_bam
+    file "${sample_name}_${tvv_species}.reads_mapped_to_contigs.stats"
+
+    """
+    # Create a BWA index of the contigs
+    bwa index \
+    -p contigs_index \
+    $contigs
+
+    # Map the reads to the contigs
+     bwa mem \
+     contigs_index \
+     $reads > reads_mapped_to_contigs.sam
+
+    # Get summary stats of the mapping
+    samtools flagstat \
+    reads_mapped_to_contigs.sam > \
+    ${sample_name}_${tvv_species}.reads_mapped_to_contigs.stats
+
+    # Remove unmapped reads and sort output (save only contig-mapped reads
+    samtools view -F 4 -bh reads_mapped_to_contigs.sam | \
+    samtools sort - > reads_mapped_to_contigs.sorted.bam
+
+    # Remove (very large) uncompressed sam file
+    rm reads_mapped_to_contigs.sam
+    """
+}
+
+// With the reads mapped to their denovo-assemblies, refine the assembly by
+// finding any mismatches where rnaSPAdes called something different than
+// what is shown by a pileup of the reads themselves
+
+process refineContigs {
+
+    publishDir "${output_directory}/analysis/05_refinement/", mode: "copy"
+
+    input:
+    tuple val(tvv_species), file(mapped_bam), file(contigs), file(reads) from mapped_bam.flatten()
+
+    output:
+    file "${sample_name}_${tvv_species}.consensus.fasta.gz"
+    file reads
+
+    """
+    # Convert the TVV-aligned-reads (BAM) into a pileup (VCF)
+    bcftools mpileup \
+        -d 1000000 \
+         -f $contigs \
+         $mapped_bam >
+         pileup.vcf
+
+    # Call the variants (BCF file)
+    bcftools call -m -Ob -o variants_called.bcf pileup.vcf
+
+    # Index the calls.bcf file
+    bcftools index variants_called.bcf
+
+    # Combine the reference fasta and the called-variants into a consensus FASTA
+    bcftools consensus \
+        -f $contigs \
+        variants_called.bcf > \
+        ${sample_name}_${tvv_species}.consensus.fasta
+
+    # Compress the consensus fasta
+    gzip ${sample_name}_${tvv_species}.consensus.fasta
+    """
+}
+*/

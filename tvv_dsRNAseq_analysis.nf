@@ -2,7 +2,7 @@
 
 // Setup default parameters if not provided any
 params.sampleName = "123414"
-params.reads = "input_reads/123414.R{1,2}.fastq.gz"
+params.reads = "input_reads/123414_sub*R{1,2}.fastq.gz"
 params.outputDirectory = "output/"
 params.phix = "genomes/phiX.fasta"
 params.tvvDir = "genomes/"
@@ -147,16 +147,67 @@ process deNovoAssembly {
 
     publishDir path: "${output_directory}/analysis/04_denovoassembly", pattern: "transcripts.fasta", mode: "copy", saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
 
-
     input:
-    file reads from binned_tvv.flatten()//.filter{ it.size() > 0 }
+    file reads from binned_tvv.flatten()
 
     output:
     tuple file("transcripts.fasta"), file(reads) into tvv_contigs
 
+    // Build contigs with rnaSPAdes; if it cannot build any contigs for that TVV species, output an empty file
     """
     # Assemble viral reads into viral genomes or partial contigs
     rnaspades.py -s $reads -o ./ || touch transcripts.fasta
+    """
+}
+
+// Map the TVV-reads to the denovo-assembled-contigs with BWA
+process mapReadsToContigs {
+
+    // Save the BAM file with the name of the TVV species
+    publishDir path: "${output_directory}/analysis/05_refinement/mapping/",
+               pattern: "reads_mapped_to_contigs.sorted.bam",
+               mode: "copy",
+               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+    // Save the mapping-statistics file with the name of the TVV species
+    publishDir path: "${output_directory}/analysis/05_refinement/mapping/",
+              pattern: "reads_mapped_to_contigs.sorted.bam",
+              mode: "copy",
+              saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+
+    // Only read in the files for TVV species where rnaSPAdes could actually construct contigs
+    input:
+    tuple file(contigs), file(reads) from tvv_contigs.filter { it.get(1).size() > 0 }
+
+    output:
+    tuple file("reads_mapped_to_contigs.sorted.bam"), file(contigs), file(reads) into mapped_bam
+    file "reads_mapped_to_contigs.stats"
+
+    """
+    echo "beginning mapping for $reads onto $contigs"
+
+    # Create a BWA index of the contigs
+    bwa index \
+    -p contigs_index \
+    $contigs
+
+    # Map the reads to the contigs
+     bwa mem \
+     contigs_index \
+     $reads > reads_mapped_to_contigs.sam
+
+    # Get summary stats of the mapping
+    samtools flagstat \
+    reads_mapped_to_contigs.sam > \
+    reads_mapped_to_contigs.stats
+
+    # Remove unmapped reads and sort output (save only contig-mapped reads
+    samtools view -F 4 -bh reads_mapped_to_contigs.sam | \
+    samtools sort - > reads_mapped_to_contigs.sorted.bam
+
+    # Remove (very large) uncompressed sam file
+    rm reads_mapped_to_contigs.sam
+
+    echo 'complete!'
     """
 }
 

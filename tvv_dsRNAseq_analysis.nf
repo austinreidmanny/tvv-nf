@@ -168,23 +168,22 @@ process mapReadsToContigs {
                pattern: "reads_mapped_to_contigs.sorted.bam",
                mode: "copy",
                saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+
     // Save the mapping-statistics file with the name of the TVV species
     publishDir path: "${output_directory}/analysis/05_refinement/mapping/",
-              pattern: "reads_mapped_to_contigs.sorted.bam",
+              pattern: "reads_mapped_to_contigs.sorted.stats",
               mode: "copy",
               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
 
     // Only read in the files for TVV species where rnaSPAdes could actually construct contigs
     input:
-    tuple file(contigs), file(reads) from tvv_contigs.filter { it.get(1).size() > 0 }
+    tuple file(contigs), file(reads) from tvv_contigs.filter { it.get(0).size() > 0 }
 
     output:
     tuple file("reads_mapped_to_contigs.sorted.bam"), file(contigs), file(reads) into mapped_bam
     file "reads_mapped_to_contigs.stats"
 
     """
-    echo "beginning mapping for $reads onto $contigs"
-
     # Create a BWA index of the contigs
     bwa index \
     -p contigs_index \
@@ -211,42 +210,6 @@ process mapReadsToContigs {
     """
 }
 
-/*
-// Map the TVV-reads to the denovo-assembled-contigs with BWA
-process mapReadsToContigs {
-    publishDir "${output_directory}/analysis/05_refinement/mapping/", mode: "copy"
-
-    input:
-    tuple val(tvv_species), file(contigs), file(reads) from tvv_contigs.flatten().filter{ it[2].size() > 0 }
-
-    output:
-    tuple val(tvv_species), file("reads_mapped_to_contigs.sorted.bam"), file(contigs), file(reads) into mapped_bam
-    file "${sample_name}_${tvv_species}.reads_mapped_to_contigs.stats"
-
-    """
-    # Create a BWA index of the contigs
-    bwa index \
-    -p contigs_index \
-    $contigs
-
-    # Map the reads to the contigs
-     bwa mem \
-     contigs_index \
-     $reads > reads_mapped_to_contigs.sam
-
-    # Get summary stats of the mapping
-    samtools flagstat \
-    reads_mapped_to_contigs.sam > \
-    ${sample_name}_${tvv_species}.reads_mapped_to_contigs.stats
-
-    # Remove unmapped reads and sort output (save only contig-mapped reads
-    samtools view -F 4 -bh reads_mapped_to_contigs.sam | \
-    samtools sort - > reads_mapped_to_contigs.sorted.bam
-
-    # Remove (very large) uncompressed sam file
-    rm reads_mapped_to_contigs.sam
-    """
-}
 
 // With the reads mapped to their denovo-assemblies, refine the assembly by
 // finding any mismatches where rnaSPAdes called something different than
@@ -254,22 +217,30 @@ process mapReadsToContigs {
 
 process refineContigs {
 
-    publishDir "${output_directory}/analysis/05_refinement/", mode: "copy"
+    // Save consensus.fasta and binned-reads.fastq with their sample name & TVV species
+    publishDir path: "${output_directory}/analysis/05_refinement/",
+               pattern: "consensus.fasta.gz",
+               mode: "copy",
+               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+
+   publishDir path: "${output_directory}/analysis/05_refinement/",
+              pattern: "*tvv*fq",
+              mode: "copy"
 
     input:
-    tuple val(tvv_species), file(mapped_bam), file(contigs), file(reads) from mapped_bam.flatten()
+    tuple file(mapped_bam), file(contigs), file(reads) from mapped_bam
 
     output:
-    file "${sample_name}_${tvv_species}.consensus.fasta.gz"
+    file "consensus.fasta.gz"
     file reads
 
     """
     # Convert the TVV-aligned-reads (BAM) into a pileup (VCF)
     bcftools mpileup \
         -d 1000000 \
-         -f $contigs \
-         $mapped_bam >
-         pileup.vcf
+        -f $contigs \
+        $mapped_bam > \
+        pileup.vcf
 
     # Call the variants (BCF file)
     bcftools call -m -Ob -o variants_called.bcf pileup.vcf
@@ -281,10 +252,10 @@ process refineContigs {
     bcftools consensus \
         -f $contigs \
         variants_called.bcf > \
-        ${sample_name}_${tvv_species}.consensus.fasta
+        consensus.fasta
 
     # Compress the consensus fasta
-    gzip ${sample_name}_${tvv_species}.consensus.fasta
+    gzip consensus.fasta
     """
+
 }
-*/

@@ -6,11 +6,12 @@ params.reads = "input_reads/123414_sub*R{1,2}.fastq.gz"
 params.outputDirectory = "output/"
 params.phix = "genomes/phiX.fasta"
 params.tvvDir = "genomes/"
+params.diamondDB = "/n/data1/hms/mbib/nibert/austin/dimamond/nr"
 
 // Read in the parameters as usable variables
 sample_name = params.sampleName
 output_directory = params.outputDirectory
-tvv_directory = params.tvvDir
+diamond_db = params.diamondDB
 
 // Read in the sample's reads files
 paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true )
@@ -19,12 +20,18 @@ paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true )
 phiX_ch = Channel.fromPath( params.phix, checkIfExists: true )
 
 // Read in the TVV reference genomes for mapping & binning
-tvv1_ch = Channel.fromPath("${tvv_directory}/tvv1.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
-tvv2_ch = Channel.fromPath("${tvv_directory}/tvv2.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
-tvv3_ch = Channel.fromPath("${tvv_directory}/tvv3.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
-tvv4_ch = Channel.fromPath("${tvv_directory}/tvv4.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
-tvv5_ch = Channel.fromPath("${tvv_directory}/tvv5.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
-tvv_sats_ch = Channel.fromPath("${tvv_directory}/tvv-dsRNA-satellites.fasta", checkIfExists: true).map { file -> tuple(file.getSimpleName(), file) }
+tvv1_ch = Channel.fromPath(params.tvvDir + "/tvv1.fasta", checkIfExists: true)
+            .map { file -> tuple(file.getSimpleName(), file) }
+tvv2_ch = Channel.fromPath(params.tvvDir + "/tvv2.fasta", checkIfExists: true)
+            .map { file -> tuple(file.getSimpleName(), file) }
+tvv3_ch = Channel.fromPath(params.tvvDir + "/tvv3.fasta", checkIfExists: true)
+            .map { file -> tuple(file.getSimpleName(), file) }
+tvv4_ch = Channel.fromPath(params.tvvDir + "/tvv4.fasta", checkIfExists: true)
+            .map { file -> tuple(file.getSimpleName(), file) }
+tvv5_ch = Channel.fromPath(params.tvvDir + "/tvv5.fasta", checkIfExists: true)
+            .map { file -> tuple(file.getSimpleName(), file) }
+tvv_sats_ch = Channel.fromPath(params.tvvDir + "/tvv-dsRNA-satellites.fasta", checkIfExists: true)
+            .map { file -> tuple(file.getSimpleName(), file) }
 
 // Trim adapters from the reads
 process trimAdapters {
@@ -231,7 +238,7 @@ process refineContigs {
     tuple file(mapped_bam), file(contigs), file(reads) from mapped_bam
 
     output:
-    file "consensus.fasta.gz"
+    tuple file("consensus.fasta.gz"), file(reads) into refined_contigs
     file reads
 
     """
@@ -256,6 +263,43 @@ process refineContigs {
 
     # Compress the consensus fasta
     gzip consensus.fasta
+    """
+
+}
+
+process classification {
+
+    // Diamond parameters
+    block_size_to_use = 2
+    // block_size_to_use = ${available_memory}/10
+
+    // Save classifications files
+    publishDir path: "${outputDirectory}/analysis/06_classification/",
+               pattern: "classification.txt",
+               mode: "copy",
+               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+
+    // Take in refined contigs and reads files
+    input:
+    tuple file(refined_contigs), file(reads) from refined_contigs
+
+    output:
+    file "classification.txt"
+
+    """
+    # Run diamond
+    diamond \
+    blastx \
+    --verbose \
+    --more-sensitive \
+    --db $diamond_db \
+    --query $refined_contigs \
+    --out classification.txt \
+    --outfmt 102 \
+    --max-hsps 1 \
+    --top 1 \
+    --block-size $block_size_to_use \
+    --index-chunks 2 \
     """
 
 }

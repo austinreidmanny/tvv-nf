@@ -6,12 +6,14 @@ params.reads = "input_reads/123414_sub*R{1,2}.fastq.gz"
 params.outputDirectory = "output/"
 params.phix = "genomes/phiX.fasta"
 params.tvvDir = "genomes/"
-params.diamondDB = "/n/data1/hms/mbib/nibert/austin/dimamond/nr"
+params.diamondDB = "/n/data1/hms/mbib/nibert/austin/diamond/nr"
+params.diamondBlockSize = "2"
 
 // Read in the parameters as usable variables
 sample_name = params.sampleName
 output_directory = params.outputDirectory
 diamond_db = params.diamondDB
+block_size = params.diamondBlockSize
 
 // Read in the sample's reads files
 paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true )
@@ -270,11 +272,10 @@ process refineContigs {
 process classification {
 
     // Diamond parameters
-    block_size_to_use = 2
     // block_size_to_use = ${available_memory}/10
 
     // Save classifications files
-    publishDir path: "${outputDirectory}/analysis/06_classification/",
+    publishDir path: "${output_directory}/analysis/06_classification/",
                pattern: "classification.txt",
                mode: "copy",
                saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
@@ -298,8 +299,9 @@ process classification {
     --outfmt 102 \
     --max-hsps 1 \
     --top 1 \
-    --block-size $block_size_to_use \
+    --block-size $block_size \
     --index-chunks 2 \
     """
 
 }
+    

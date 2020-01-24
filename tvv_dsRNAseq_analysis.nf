@@ -2,7 +2,7 @@
 
 // Setup default parameters if not provided any
 params.sampleName = "123414"
-params.reads = "input_reads/123414_sub*R{1,2}.fastq.gz"
+params.reads = "input/123414*one-percent*R{1,2}.fastq"
 params.outputDirectory = "output/"
 params.phix = "genomes/phiX.fasta"
 params.tvvDir = "genomes/"
@@ -285,7 +285,7 @@ process classification {
     tuple file(refined_contigs), file(reads) from refined_contigs
 
     output:
-    file "classification.txt" into classified_contigs
+    tuple file("classification.txt"), file(reads) into classified_contigs
 
     """
     # Run diamond
@@ -314,13 +314,13 @@ process taxonomy {
                saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
 
     input:
-    file classifications from classified_contigs
+    tuple file(classifications), file(reads) from classified_contigs
 
     output:
     file "classification.taxonomy.txt"
 
     """
-    python3 py/diamondToTaxonomy.py $classifications
+    diamondToTaxonomy.py $classifications
     """
 
 }

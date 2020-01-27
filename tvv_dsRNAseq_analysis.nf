@@ -122,7 +122,7 @@ process mapToTVV {
     tuple tvv_species, file(tvv_satellites) from tvv_sats_ch
 
     output:
-    file "${sample_name}_tvv*fq" into binned_tvv, binned_tvv_fastq
+    file "${sample_name}_*fq" into binned_tvv, binned_tvv_fastq
 
     """
     bbsplit.sh \
@@ -142,7 +142,7 @@ process fastqToFasta {
     file fastq from binned_tvv_fastq.flatten()
 
     output:
-    file "${sample_name}_tvv*.fasta"
+    file "${sample_name}_*.fasta"
 
     """
     seqtk seq -A $fastq > "${fastq.simpleName}.fasta"
@@ -233,7 +233,7 @@ process refineContigs {
                saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
 
    publishDir path: "${output_directory}/analysis/05_refinement/",
-              pattern: "*tvv*fq",
+              pattern: "*fq",
               mode: "copy"
 
     input:

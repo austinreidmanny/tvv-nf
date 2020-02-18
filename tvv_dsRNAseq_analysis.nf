@@ -236,8 +236,7 @@ process refineContigs {
     tuple file(mapped_bam), file(contigs), file(reads) from mapped_bam
 
     output:
-    tuple file("consensus.fasta.gz"), file(reads) into refined_contigs
-    file reads
+    tuple file("consensus.fasta.gz"), file(reads) into refined_contigs and refined_contigs_and_reads_for_coverage
 
     """
     # Convert the TVV-aligned-reads (BAM) into a pileup (VCF)
@@ -292,7 +291,7 @@ process classification {
     --db $params.diamondDB \
     --query $refined_contigs \
     --out classification.txt \
-    --outfmt 102 \
+    --outfmt 6 qseqid staxids evalue bitscore pident qcovhsp \
     --max-hsps 1 \
     --top 1 \
     --block-size $params.blockSize \
@@ -314,10 +313,70 @@ process taxonomy {
     tuple file(classifications), file(reads) from classified_contigs
 
     output:
-    file "classification.taxonomy.txt"
+    file "classification.taxonomy.txt" into contigs_with_taxonomy
 
     """
     diamondToTaxonomy.py $classifications
+    """
+
+}
+
+// Map the reads to the contigs to determine per-contig coverage
+process coverage {
+
+    publishDir path: "$params.outputDirectory/07_coverage/",
+               pattern: "contigs_with_taxonomy_and_coverage.txt",
+               mode: "copy",
+               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+
+    input:
+    tuple file(contigs), file(reads) from refined_contigs_and_reads_for_coverage
+    file taxonomy from contigs_with_taxonomy
+
+    output:
+    file "contigs_with_taxonomy_and_coverage.txt"
+
+    """
+    # Index contigs for BWA
+    bwa index -p bwa_index $contigs
+
+    # Map reads to contigs with BWA-mem
+    bwa mem -t $params.threads bwa_index $reads | \
+    samtools sort --threads $params.threads -o mapped.bam
+
+    # Calculate the mean-depth (i.e., coverage) per contig; keep each contig's name & coverage
+    samtools coverage mapped.bam | cut -f 1,7 > contigs_with_coverage.txt
+
+    # Join the DIAMOND classification output & the coverage output
+    join \
+        -j 1 \
+        -t \$'\t' \
+        --check-order \
+        <(grep -v "^#" contigs_with_coverage.txt | sort -k1,1) \
+        <(sort -k1,1 $taxonomy) > \
+    contigs_with_taxonomy_and_coverage.unsorted.txt
+
+    # Make a header for a final results table
+    echo -e \
+        "#Contig\t" \
+        "#Coverage\t" \
+        "#TaxonID\t" \
+        "#e-value\t" \
+        "#Bitscore\t" \
+        "#PercentIdentity\t" \
+        "#QueryCoverage\t" \
+        "#Domain\t" \
+        "#Kingdom\t" \
+        "#Phylum\t" \
+        "#Class\t" \
+        "#Order\t" \
+        "#Family\t" \
+        "#Genus_species" \
+    > contigs_with_taxonomy_and_coverage.txt
+
+    # Sort the contigs by coverage
+    sort -rgk2,2 contigs_with_taxonomy_and_coverage.unsorted.txt >> \
+    contigs_with_taxonomy_and_coverage.txt
     """
 
 }

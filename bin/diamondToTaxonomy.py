@@ -7,7 +7,7 @@ import requests
 
 # Check to make sure this script is invoked correctly
 if len(sys.argv) < 2:
-	print("Usage '{} {}'.format(sys.argv[0], 'diamond_results.txt')")
+	print("Usage {} {}".format(sys.argv[0], 'diamond_results.txt'))
 	exit(1)
 
 # Setup the inputs and outputs
@@ -19,9 +19,9 @@ with open(inf, "r") as input:
 	for line in input:
 		line = line.strip()
 		line_arr = line.split()
-		if len(line_arr) != 3:
+		if len(line_arr) != 6:
 			print("Diamond file should have the following format:")
-			print("'{}\t{}\t{}'.format(sequence_name, taxonID, evalue)")
+			print("'{}\t{}\t{}\t{}\t{}\t{}'.format(sequence_name, taxonID, evalue, bitscore, percent_identity, query_coverage)")
 			exit(2)
 		break                               
 
@@ -65,12 +65,19 @@ with open(inf, "r") as input, \
 	
 		# For each sequence, split it into an array and name each item
 		line_arr = line.split()
-		contig_name = str(line_arr[0])
-		taxid = str(line_arr[1])
-		evalue = str(line_arr[2])
-		if not taxid:
+		if len(line_arr) != 6:
+			print("Line does not contain all required fields")
+			print("Offending line: %s" % line_arr)
 			continue
-	
+
+		else:
+			contig_name = str(line_arr[0])
+			taxid = str(line_arr[1])
+			evalue = str(line_arr[2])
+			bitscore = str(line_arr[3])
+			percentid = str(line_arr[4])
+			querycov = str(line_arr[5])
+
 		# Split the taxonomy result by rank
 		taxonomy = taxid_translator[taxid]
 		tax = {}
@@ -122,6 +129,9 @@ with open(inf, "r") as input, \
 
 		# Write it all to a new file
 		output.write("\t".join((contig_name, taxid, evalue, \
-                        	        superkingdom, kingdom, phylum, classs, \
-                	                order, family, genus, genus_species)))
+					bitscore, percentid, querycov, \
+					superkingdom, kingdom, phylum, classs, \
+					order, family, genus, genus_species)))
+
 		output.write("\n")
+

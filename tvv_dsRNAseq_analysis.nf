@@ -17,17 +17,17 @@ paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true )
 phiX_ch = Channel.fromPath( params.phix, checkIfExists: true )
 
 // Read in the TVV reference genomes for mapping & binning
-tvv1_ch = Channel.fromPath(params.tvvDir + "/tvv1.fasta", checkIfExists: true)
+tvv1_ch = Channel.fromPath(params.tvvDirectory + "/tvv1.fasta", checkIfExists: true)
             .map { file -> tuple(file.getSimpleName(), file) }
-tvv2_ch = Channel.fromPath(params.tvvDir + "/tvv2.fasta", checkIfExists: true)
+tvv2_ch = Channel.fromPath(params.tvvDirectory + "/tvv2.fasta", checkIfExists: true)
             .map { file -> tuple(file.getSimpleName(), file) }
-tvv3_ch = Channel.fromPath(params.tvvDir + "/tvv3.fasta", checkIfExists: true)
+tvv3_ch = Channel.fromPath(params.tvvDirectory + "/tvv3.fasta", checkIfExists: true)
             .map { file -> tuple(file.getSimpleName(), file) }
-tvv4_ch = Channel.fromPath(params.tvvDir + "/tvv4.fasta", checkIfExists: true)
+tvv4_ch = Channel.fromPath(params.tvvDirectory + "/tvv4.fasta", checkIfExists: true)
             .map { file -> tuple(file.getSimpleName(), file) }
-tvv5_ch = Channel.fromPath(params.tvvDir + "/tvv5.fasta", checkIfExists: true)
+tvv5_ch = Channel.fromPath(params.tvvDirectory + "/tvv5.fasta", checkIfExists: true)
             .map { file -> tuple(file.getSimpleName(), file) }
-tvv_sats_ch = Channel.fromPath(params.tvvDir + "/tvv-dsRNA-satellites.fasta", checkIfExists: true)
+tvv_sats_ch = Channel.fromPath(params.tvvDirectory + "/tvv-dsRNA-satellites.fasta", checkIfExists: true)
             .map { file -> tuple(file.getSimpleName(), file) }
 
 // Trim adapters from the reads
@@ -236,7 +236,7 @@ process refineContigs {
     tuple file(mapped_bam), file(contigs), file(reads) from mapped_bam
 
     output:
-    tuple file("consensus.fasta.gz"), file(reads) into refined_contigs and refined_contigs_and_reads_for_coverage
+    tuple file("consensus.fasta.gz"), file(reads) into refined_contigs, refined_contigs_and_reads_for_coverage
 
     """
     # Convert the TVV-aligned-reads (BAM) into a pileup (VCF)

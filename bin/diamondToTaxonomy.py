@@ -20,10 +20,10 @@ with open(inf, "r") as input:
 		line = line.strip()
 		line_arr = line.split()
 		if len(line_arr) != 6:
-			print("Diamond file should have the following format:")
-			print("'{}\t{}\t{}\t{}\t{}\t{}'.format(sequence_name, taxonID, evalue, bitscore, percent_identity, query_coverage)")
-			exit(2)
-		break                               
+			print("WARNING: Diamond file should have the following format:")
+			print("'{}\t{}\t{}\t{}\t{}\t{}'.format('sequence_name', 'taxonID', 'evalue', 'bitscore', 'percent_identity', 'query_coverage')")
+			print("Continuing to next line...")
+		break
 
 # Read in the DIAMOND results, find all the unique taxonIDs, and
 # translate those into full taxonomic lineages
@@ -34,7 +34,7 @@ with open(inf, "r") as input:
 
 	for line in input:
 		line = line.strip()
-		line_arr = line.split()	
+		line_arr = line.split()
 		taxid = str(line_arr[1])
 		if not taxid:
 			continue
@@ -50,7 +50,7 @@ with open(inf, "r") as input:
 		url = 'http://taxonomy.jgi-psf.org/sc/simple/id/' + taxid
 		t = requests.get(url)
 		taxonomy = str(t.text)
-		
+
 		# Save that lineage with the taxid
 		taxid_translator[taxid] = taxonomy
 
@@ -62,7 +62,7 @@ with open(inf, "r") as input, \
      open(outf, "w") as output:
 	for line in input:
 		line = line.strip()
-	
+
 		# For each sequence, split it into an array and name each item
 		line_arr = line.split()
 		if len(line_arr) != 6:
@@ -111,7 +111,7 @@ with open(inf, "r") as input, \
 			order = tax['o']
 		except:
 			order = 'N/A'
-	
+
 		try:
 			family = tax['f']
 		except:
@@ -134,4 +134,3 @@ with open(inf, "r") as input, \
 					order, family, genus, genus_species)))
 
 		output.write("\n")
-

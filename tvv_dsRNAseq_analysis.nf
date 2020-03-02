@@ -1,54 +1,31 @@
 #!/usr/bin/env nextflow
 
 // Setup default parameters if not provided any
-params.sample = "sample"
-params.reads = "input/123414*one-percent*R{1,2}.fastq"
-params.outputDirectory = "output/" + params.sample
-params.phix = "genomes/phiX.fasta"
+//params.sample = "sample"
+params.reads = "data/*_R{1,2}.fastq"
+params.outputDirectory = "output/"
+params.phiX = "genomes/phiX.fasta"
 params.tvvDirectory = "genomes/"
-params.diamondDB = "/n/data1/hms/mbib/nibert/austin/diamond/ncbi-viruses_tvv5.dmnd"
+params.diamondDB = "/n/data1/hms/mbib/nibert/austin/diamond/ncbi-viruses-bacteria-tv.dmnd"
 params.blockSize = "2"
 params.threads = "4"
 
 // Read in the sample's reads files
-paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true )
-
-// Read in phiX genome for depletion
-phiX_ch = Channel.fromPath( params.phix, checkIfExists: true )
-
-// Read in the TVV reference genomes for mapping & binning
-tvv1_ch = Channel.fromPath(params.tvvDirectory + "/tvv1.fasta", checkIfExists: true)
-            .map { file -> tuple(file.getSimpleName(), file) }
-tvv2_ch = Channel.fromPath(params.tvvDirectory + "/tvv2.fasta", checkIfExists: true)
-            .map { file -> tuple(file.getSimpleName(), file) }
-tvv3_ch = Channel.fromPath(params.tvvDirectory + "/tvv3.fasta", checkIfExists: true)
-            .map { file -> tuple(file.getSimpleName(), file) }
-tvv4_ch = Channel.fromPath(params.tvvDirectory + "/tvv4.fasta", checkIfExists: true)
-            .map { file -> tuple(file.getSimpleName(), file) }
-tvv5_ch = Channel.fromPath(params.tvvDirectory + "/tvv5.fasta", checkIfExists: true)
-            .map { file -> tuple(file.getSimpleName(), file) }
-tvv_sats_ch = Channel.fromPath(params.tvvDirectory + "/tvv-dsRNA-satellites.fasta", checkIfExists: true)
-            .map { file -> tuple(file.getSimpleName(), file) }
+paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true, flat: true)
 
 // Trim adapters from the reads
 process trimAdapters {
     publishDir "${params.outputDirectory}/analysis/01_adapter_trimmed/", mode: "copy"
 
     input:
-    tuple val(sampleID), file(reads) from paired_reads_ch
+    tuple val(sampleID), file(forward_reads), file(reverse_reads) from paired_reads_ch
 
     output:
-    file "*val*fq.gz" into trimmed_reads
+    tuple val(sampleID), file("${sampleID}*val_1.fq.gz"), file("${sampleID}*val_2.fq.gz") into trimmed_reads
 
     """
-    trim_galore \
-        --paired \
-        --stringency 5 \
-        --quality 20 \
-        --fastqc \
-        --gzip \
-        --basename $params.sample \
-        $reads
+    bash trimAdapters.sh \
+    -s $sampleID -1 $forward_reads -2 $reverse_reads -o "./"
     """
 }
 
@@ -57,230 +34,197 @@ process depletePhiX {
     publishDir "${params.outputDirectory}/analysis/02_phiX_depleted/", mode: "copy"
 
     input:
-    file trimmed_reads
-    file phiX_genome from phiX_ch
+    tuple val(sampleID), file(trimmed_fwd_reads), file(trimmed_rev_reads) from trimmed_reads
 
     output:
-    file "*phiX_depleted*.R1.fq.gz" into phiX_depleted_forward_reads
-    file "*phiX_depleted*.R2.fq.gz" into phiX_depleted_reverse_reads
-    file "*phiX.stats.txt"
-    file "*phiX.counts.txt"
+    tuple val(sampleID), \
+          file("${sampleID}*R1.fq.gz"), \
+          file("${sampleID}*R2.fq.gz") \
+    into phiX_depleted_reads
 
     """
-    # Build BWA index out of the reference
-    bwa index \
-    -p phiX_index \
-    $phiX_genome
-
-    # Perform the mapping
-    bwa mem \
-    phiX_index \
-    $trimmed_reads > phiX_mapped_sam
-
-    # Get summary stats of the mapping
-    samtools flagstat phiX_mapped_sam > ${params.sample}.phiX.stats.txt
-
-    # Retrieve phiX-depleted reads & sort output
-    samtools view -f 4 -bh phiX_mapped_sam | samtools sort > ${params.sample}.phiX_depleted.sorted.bam
-
-    # Save how many phiX reads were in the sequencing data
-    samtools idxstats ${params.sample}.phiX_depleted.sorted.bam > \
-        ${params.sample}.phiX.counts.txt
-
-    # Print that phiX count to the screen
-    echo "name   length   mapped_reads   unmapped_reads"
-    cat ${params.sample}.phiX.counts.txt
-
-    # Convert the phiX-depleted BAM back to individual FASTQ files
-    samtools fastq \
-    -1 ${params.sample}.phiX_depleted.R1.fq \
-    -2 ${params.sample}.phiX_depleted.R2.fq \
-    -s ${params.sample}.phiX_depleted.singletons.fq \
-    ${params.sample}.phiX_depleted.sorted.bam
-
-    # Compress the phiX-depleted fastqs
-    gzip ${params.sample}.phiX_depleted.*fq
+    bash depletePhiX.sh \
+    -s $sampleID -1 $trimmed_fwd_reads -2 $trimmed_rev_reads -o "./" -p "${workflow.launchDir}/$params.phiX"
     """
+
 }
 
 process mapToTVV {
     publishDir "${params.outputDirectory}/analysis/03_binned_reads/fastq/", mode: "copy"
 
     input:
-    file forward_reads from phiX_depleted_forward_reads
-    file reverse_reads from phiX_depleted_reverse_reads
-    tuple tvv_species, file(tvv1) from tvv1_ch
-    tuple tvv_species, file(tvv2) from tvv2_ch
-    tuple tvv_species, file(tvv3) from tvv3_ch
-    tuple tvv_species, file(tvv4) from tvv4_ch
-    tuple tvv_species, file(tvv5) from tvv5_ch
-    tuple tvv_species, file(tvv_satellites) from tvv_sats_ch
+    tuple val(sampleID), file(forward_reads), file(reverse_reads) from phiX_depleted_reads
 
     output:
-    file "${params.sample}_*fq" into binned_tvv, binned_tvv_fastq
+    file "${sampleID}_*fq" into binned_tvv, binned_tvv_fastq
 
     """
-    bbsplit.sh \
-        in1=$forward_reads \
-        in2=$reverse_reads \
-        ref="${tvv1},${tvv2},${tvv3},${tvv4},${tvv5},${tvv_satellites}" \
-        basename="${params.sample}_%.fq" \
-        outu=unmapped_reads \
-        ambig2=best
+    bash mapToTVV.sh \
+    -s $sampleID -1 $forward_reads -2 $reverse_reads  -o "./" -t "$workflow.launchDir/$params.tvvDirectory"
     """
 }
+
+// Wrangle all six (one per TVV species + satellites) files from binned_tvv & binned_tvv_fastq
+binned_tvv = binned_tvv.flatten()
+             .map { file -> tuple(file.simpleName, file)}
+
+binned_tvv_fastq = binned_tvv_fastq.flatten()
+                   .map { file -> tuple(file.simpleName, file)}
+
 
 process fastqToFasta {
     publishDir "${params.outputDirectory}/analysis/03_binned_reads/fasta/", mode: "copy"
 
     input:
-    file fastq from binned_tvv_fastq.flatten()
+    tuple val(sample_and_tvv_species), file(fastq) from binned_tvv_fastq
 
     output:
-    file "${params.sample}_*.fasta"
+    file "${sample_and_tvv_species}.fasta"
 
     """
-    seqtk seq -A $fastq > "${fastq.simpleName}.fasta"
+    seqtk seq -A $fastq > "${sample_and_tvv_species}.fasta"
     """
 }
-
 
 process deNovoAssembly {
 
+    // Now that we're at the multiple TVV files per sample stage, I am going to run these scripts
+    // within their own sample+species specific work directories to prevent overwriting/interference,
+    // but save them all together in the same directory at the end
+
     publishDir path: "${params.outputDirectory}/analysis/04_denovoassembly",
-               pattern: "transcripts.fasta",
-               mode: "copy",
-               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+               pattern: "${sample_and_tvv_species}.transcripts.fasta",
+               mode: "copy"
 
     input:
-    file reads from binned_tvv.flatten()
+    tuple val(sample_and_tvv_species), file(reads) from binned_tvv
 
     output:
-    tuple file("transcripts.fasta"), file(reads) into tvv_contigs
-
-    // Build contigs with rnaSPAdes; if it cannot build any contigs for that TVV species, output an empty file
-    """
-    # Assemble viral reads into viral genomes or partial contigs
-    rnaspades.py -s $reads -o ./ || touch transcripts.fasta
-    """
-}
-
-// Map the TVV-reads to the denovo-assembled-contigs with BWA
-process mapReadsToContigs {
-
-    // Save the BAM file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping/",
-               pattern: "reads_mapped_to_contigs.sorted.bam",
-               mode: "copy",
-               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
-
-    // Save the mapping-statistics file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping/",
-              pattern: "reads_mapped_to_contigs.sorted.stats",
-              mode: "copy",
-              saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
-
-    // Only read in the files for TVV species where rnaSPAdes could actually construct contigs
-    input:
-    tuple file(contigs), file(reads) from tvv_contigs.filter { it.get(0).size() > 0 }
-
-    output:
-    tuple file("reads_mapped_to_contigs.sorted.bam"), file(contigs), file(reads) into mapped_bam
-    file "reads_mapped_to_contigs.stats"
+    tuple val(sample_and_tvv_species), \
+          file("${sample_and_tvv_species}.transcripts.fasta"), \
+          file(reads) \
+    into tvv_contigs
 
     """
-    # Create a BWA index of the contigs
-    bwa index \
-    -p contigs_index \
-    $contigs
+    # Build contigs with rnaSPAdes & drop any short contigs <300 nt;
+    # if no contigs can be built that TVV species, output an empty file
 
-    # Map the reads to the contigs
-     bwa mem \
-     contigs_index \
-     $reads > reads_mapped_to_contigs.sam
+    rnaspades.py -s $reads -o "${sample_and_tvv_species}/" && \
+    seqtk seq -L 300 "${sample_and_tvv_species}/transcripts.fasta" > \
+                     "${sample_and_tvv_species}/transcripts.trimmed.fasta" && \
+    mv "${sample_and_tvv_species}/transcripts.trimmed.fasta" \
+       "${sample_and_tvv_species}/transcripts.fasta" || \
+    touch "${sample_and_tvv_species}/transcripts.fasta"
 
-    # Get summary stats of the mapping
-    samtools flagstat \
-    reads_mapped_to_contigs.sam > \
-    reads_mapped_to_contigs.stats
+    # If rnaSPAdes partially succeeds (can only make low-quality contigs), it will end silently without providing a transcripts file
+    if [[ ! -f "./${sample_and_tvv_species}/transcripts.fasta" ]]; then
+        mkdir -p "./${sample_and_tvv_species}/"
+        touch "./${sample_and_tvv_species}/transcripts.fasta"
+    fi
 
-    # Remove unmapped reads and sort output (save only contig-mapped reads
-    samtools view -F 4 -bh reads_mapped_to_contigs.sam | \
-    samtools sort - > reads_mapped_to_contigs.sorted.bam
-
-    # Remove (very large) uncompressed sam file
-    rm reads_mapped_to_contigs.sam
-
-    echo 'complete!'
+    # Rename transcripts file to include sample name & move into main folder
+    mv "${sample_and_tvv_species}/transcripts.fasta" "${sample_and_tvv_species}.transcripts.fasta"
     """
 }
-
-
-// With the reads mapped to their denovo-assemblies, refine the assembly by
-// finding any mismatches where rnaSPAdes called something different than
-// what is shown by a pileup of the reads themselves
 
 process refineContigs {
 
-    // Save consensus.fasta and binned-reads.fastq with their sample name & TVV species
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
-               pattern: "consensus.fasta.gz",
-               mode: "copy",
-               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+    // Map the TVV-reads to the denovo-assembled-contigs with BWA;
+    // with the reads mapped to their denovo-assemblies, refine the assembly by
+    // finding any mismatches where rnaSPAdes called something different than
+    // what is shown by a pileup of the reads themselves
 
-   publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
-              pattern: "*fq",
+    // Save the refined TVV contigs
+    publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
+               pattern: "${sample_and_tvv_species}.refined_contigs.fasta.gz",
+               mode: "copy"
+
+   // Save the variants-called bcf file
+   publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping",
+              pattern: "${sample_and_tvv_species}.variants_called.bcf",
               mode: "copy"
 
+    // Save the BAM file with the name of the TVV species
+    publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping/",
+               pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.bam",
+               mode: "copy"
+
+    // Save the mapping-statistics file with the name of the TVV species
+    publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping/",
+              pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.stats",
+              mode: "copy"
+
+    // Only read in the files for TVV species where rnaSPAdes could actually construct contigs
     input:
-    tuple file(mapped_bam), file(contigs), file(reads) from mapped_bam
+    tuple val(sample_and_tvv_species), \
+          file(contigs), \
+          file(reads) \
+    from tvv_contigs.filter { it.get(1).size() > 0 }
 
     output:
-    tuple file("consensus.fasta.gz"), file(reads) into refined_contigs, refined_contigs_and_reads_for_coverage
+    tuple val(sample_and_tvv_species), \
+          file("${sample_and_tvv_species}.refined_contigs.fasta.gz"), \
+          file(reads) \
+    into refined_contigs, refined_contigs_and_reads_for_coverage
 
     """
-    # Convert the TVV-aligned-reads (BAM) into a pileup (VCF)
-    bcftools mpileup \
-        -d 1000000 \
-        -f $contigs \
-        $mapped_bam > \
-        pileup.vcf
-
-    # Call the variants (BCF file)
-    bcftools call -m -Ob -o variants_called.bcf pileup.vcf
-
-    # Index the calls.bcf file
-    bcftools index variants_called.bcf
-
-    # Combine the reference fasta and the called-variants into a consensus FASTA
-    bcftools consensus \
-        -f $contigs \
-        variants_called.bcf > \
-        consensus.fasta
-
-    # Compress the consensus fasta
-    gzip consensus.fasta
+    bash refineContigs.sh  \
+    -s "${sample_and_tvv_species}" -r $reads -c $contigs -o "./" -t $params.threads
     """
+}
 
+// Map the reads to the contigs to determine per-contig coverage
+process coverage {
+
+    publishDir path: "${params.outputDirectory}/analysis/06_coverage/",
+               pattern: "${sample_and_tvv_species}.contigs_coverage.txt",
+               mode: "copy"
+
+    input:
+    tuple val(sample_and_tvv_species), \
+          file(refined_contigs), \
+          file(reads) \
+    from refined_contigs_and_reads_for_coverage
+
+    output:
+    tuple val(sample_and_tvv_species), \
+          file(refined_contigs), \
+          file("${sample_and_tvv_species}.contigs_coverage.txt") \
+    into contigs_with_coverage
+
+    """
+    # Index contigs for BWA
+    bwa index -p "${sample_and_tvv_species}_index" $refined_contigs
+
+    # Map reads to contigs with BWA-mem
+    bwa mem -t $params.threads "${sample_and_tvv_species}_index" $reads | \
+    samtools sort --threads $params.threads -o "${sample_and_tvv_species}.mapped.bam"
+
+    # Calculate the mean-depth (i.e., coverage) per contig; keep each contig's name & coverage; throw away header; sort by coverage
+    samtools coverage "${sample_and_tvv_species}.mapped.bam" | \
+    cut -f 1,7 > "${sample_and_tvv_species}.contigs_coverage.txt"
+    """
 }
 
 process classification {
 
-    // Diamond parameters
-    // block_size_to_use = ${available_memory}/10
-
     // Save classifications files
-    publishDir path: "${params.outputDirectory}/analysis/06_classification/",
-               pattern: "classification.txt",
-               mode: "copy",
-               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+    publishDir path: "${params.outputDirectory}/analysis/07_classification/",
+               pattern: "${sample_and_tvv_species}.classification.txt",
+               mode: "copy"
 
-    // Take in refined contigs and reads files
+    // Take in refined contigs and reads files only if it's from the unmapped read/contigs
     input:
-    tuple file(refined_contigs), file(reads) from refined_contigs
+    tuple val(sample_and_tvv_species), \
+          file(refined_contigs),  \
+          file(coverage) \
+    from contigs_with_coverage.filter { it.get(0) =~/unmapped/ }
 
     output:
-    tuple file("classification.txt"), file(reads) into classified_contigs
+    tuple val(sample_and_tvv_species), \
+          file("${sample_and_tvv_species}.classification.txt"), \
+          file(coverage) \
+    into classified_contigs
 
     """
     # Run diamond
@@ -290,71 +234,47 @@ process classification {
     --more-sensitive \
     --db $params.diamondDB \
     --query $refined_contigs \
-    --out classification.txt \
+    --out "${sample_and_tvv_species}.classification.txt" \
     --outfmt 6 qseqid staxids evalue bitscore pident qcovhsp \
     --max-hsps 1 \
-    --top 1 \
+    --top 0 \
     --block-size $params.blockSize \
     --index-chunks 2 \
     --threads $params.threads
-    """
 
+    """
 }
 
 process taxonomy {
 
     // Save translated classification files containing the full taxonomic lineages
-    publishDir path: "${params.outputDirectory}/analysis/06_classification/",
-               pattern: "classification.taxonomy.txt",
-               mode: "copy",
-               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
+    publishDir path: "${params.outputDirectory}/analysis/08_taxonomy/",
+               pattern: "${sample_and_tvv_species}.classification.taxonomy.txt",
+               mode: "copy"
+
+   publishDir path: "${params.outputDirectory}/analysis/08_taxonomy/",
+              pattern: "${sample_and_tvv_species}.final_table.txt",
+              mode: "copy"
 
     input:
-    tuple file(classifications), file(reads) from classified_contigs
+    tuple val(sample_and_tvv_species), file(classifications), file(coverage) from classified_contigs
 
     output:
-    file "classification.taxonomy.txt" into contigs_with_taxonomy
+    file "${sample_and_tvv_species}.final_table.txt"
 
     """
+    # Translate the DIAMOND results to full lineages
     diamondToTaxonomy.py $classifications
-    """
 
-}
-
-// Map the reads to the contigs to determine per-contig coverage
-process coverage {
-
-    publishDir path: "$params.outputDirectory/07_coverage/",
-               pattern: "contigs_with_taxonomy_and_coverage.txt",
-               mode: "copy",
-               saveAs: { filename -> "${reads.getSimpleName()}.${filename}" }
-
-    input:
-    tuple file(contigs), file(reads) from refined_contigs_and_reads_for_coverage
-    file taxonomy from contigs_with_taxonomy
-
-    output:
-    file "contigs_with_taxonomy_and_coverage.txt"
-
-    """
-    # Index contigs for BWA
-    bwa index -p bwa_index $contigs
-
-    # Map reads to contigs with BWA-mem
-    bwa mem -t $params.threads bwa_index $reads | \
-    samtools sort --threads $params.threads -o mapped.bam
-
-    # Calculate the mean-depth (i.e., coverage) per contig; keep each contig's name & coverage
-    samtools coverage mapped.bam | cut -f 1,7 > contigs_with_coverage.txt
-
-    # Join the DIAMOND classification output & the coverage output
+    # Join the coverage values and the taxonomy results
     join \
         -j 1 \
         -t \$'\t' \
         --check-order \
-        <(grep -v "^#" contigs_with_coverage.txt | sort -k1,1) \
-        <(sort -k1,1 $taxonomy) > \
-    contigs_with_taxonomy_and_coverage.unsorted.txt
+        <(sort -k1,1 $coverage) \
+        <(grep -v "^#" "${sample_and_tvv_species}.classification.taxonomy.txt" | sort -k1,1) | \
+    sort -rgk2,2 > \
+    "${sample_and_tvv_species}.contigs_coverage_taxonomy.txt"
 
     # Make a header for a final results table
     echo -e \
@@ -372,11 +292,11 @@ process coverage {
         "#Order\t" \
         "#Family\t" \
         "#Genus_species" \
-    > contigs_with_taxonomy_and_coverage.txt
+    > "${sample_and_tvv_species}.final_table.txt"
 
-    # Sort the contigs by coverage
-    sort -rgk2,2 contigs_with_taxonomy_and_coverage.unsorted.txt >> \
-    contigs_with_taxonomy_and_coverage.txt
+    # Add the data to the final with just the header
+    cat "${sample_and_tvv_species}.contigs_coverage_taxonomy.txt" >> \
+        "${sample_and_tvv_species}.final_table.txt"
     """
 
 }

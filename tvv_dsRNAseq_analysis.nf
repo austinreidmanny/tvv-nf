@@ -1,14 +1,45 @@
 #!/usr/bin/env nextflow
 
-// Setup default parameters if not provided any
-//params.sample = "sample"
-params.reads = "data/*_R{1,2}.fastq"
-params.outputDirectory = "output/"
-params.phiX = "genomes/phiX.fasta"
-params.tvvDirectory = "genomes/"
-params.diamondDB = "/n/data1/hms/mbib/nibert/austin/diamond/ncbi-viruses-bacteria-tv.dmnd"
-params.blockSize = "2"
-params.threads = "4"
+/*
+   ------------------------------------------------------------------------------------------------
+   WELCOME TO THE tvv-nf PIPELINE
+   ------------------------------------------------------------------------------------------------
+   Objective:
+
+   This pipeline will take in a set of paired-end dsRNA-seq reads, map them to all TVV species,
+   produce refined contigs (attempting to generate full-length viral genomes), and will assemble all
+   non-TVV reads into contigs to look for new viruses in these Trichomonas vaginalis samples
+   ------------------------------------------------------------------------------------------------
+   Software:
+
+   Download the latest version of tvv-nf @ https://github.com/austinreidmanny/tvv-nf
+   Only requirements are
+     * Operating system: Linux/macOS
+     * Nextflow (https://www.nextflow.io)
+     * Conda (https://docs.conda.io/en/latest/miniconda.html)
+   ------------------------------------------------------------------------------------------------
+   Usage:
+
+   nextflow run tvv_dsRNAseq_analysis.nf --reads "data/*R{1,2}.fastq.gz"
+
+   optional parameters:
+   --outputDirectory "output/dir/"
+   --diamondDB "path/to/db"
+   --blockSize "#" [for DIAMOND, should be approx 1/10 of your memory/RAM]
+   --threads "#"
+   --phiX "custom/path/to/phiX.fasta"
+   --tvvDirectory "custom/path/to/tvv*.fasta"
+   ------------------------------------------------------------------------------------------------
+   Contact:
+
+   Austin R. Manny
+   Nibert Lab @ Harvard Medical School
+   austinmanny@g.harvard.edu
+   github.com/austinreidmanny
+   ------------------------------------------------------------------------------------------------
+*/
+
+//================================================================================================//
 
 // Read in the sample's reads files
 paired_reads_ch = Channel.fromFilePairs( params.reads, checkIfExists: true, flat: true)
@@ -140,17 +171,17 @@ process refineContigs {
                mode: "copy"
 
    // Save the variants-called bcf file
-   publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping",
+   publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
               pattern: "${sample_and_tvv_species}.variants_called.bcf",
               mode: "copy"
 
     // Save the BAM file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping/",
+    publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
                pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.bam",
                mode: "copy"
 
     // Save the mapping-statistics file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/mapping/",
+    publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
               pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.stats",
               mode: "copy"
 

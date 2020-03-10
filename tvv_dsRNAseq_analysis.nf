@@ -13,10 +13,13 @@
    Software:
 
    Download the latest version of tvv-nf @ https://github.com/austinreidmanny/tvv-nf
-   Only requirements are
+   Dependencies & requirements are
      * Operating system: Linux/macOS
      * Nextflow (https://www.nextflow.io)
      * Conda (https://docs.conda.io/en/latest/miniconda.html)
+     * DIAMOND database
+     * Kraken database
+     * Krona set up (Conda will install it, but might not put it in your Bash path or initiate the taxonomy database for this)
    ------------------------------------------------------------------------------------------------
    Usage:
 
@@ -71,7 +74,7 @@ process depletePhiX {
     tuple val(sampleID), \
           file("${sampleID}*R1.fq.gz"), \
           file("${sampleID}*R2.fq.gz") \
-    into phiX_depleted_reads
+    into phiX_depleted_reads and cleaned_reads_for_classification
 
     """
     bash depletePhiX.sh \
@@ -330,4 +333,52 @@ process taxonomy {
         "${sample_and_tvv_species}.final_table.txt"
     """
 
+}
+
+process classifyReads {
+    // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
+    // census of just the (lightly processed/cleaned) unassembled reads
+
+    publishDir path: "${params.outputDirectory}/analysis/09_classify_unassembled_reads/",
+               pattern: "${sampleID}.kraken-report.txt",
+               mode: "copy"
+
+    input:
+    tuple val(sampleID), file(forward_reads), file(reverse_reads) from cleaned_reads_for_classification
+
+    output:
+    tuple val(sampleID), file("${sampleID}.kraken-report.txt") into classified_reads
+
+    """
+    kraken2 \
+    --db $krakenDB \
+    --paired --gzip-compressed --memory-mapping \
+    --threads 8 \
+    --output ${sample}.kraken-output.txt \
+    --report ${sample}.kraken-report.txt \
+    $forward_reads \
+    $reverse_reads
+    """
+
+}
+
+process visualizeReads {
+    // Visualize the classification of the reads from the 'classifyReads' process
+
+    publishDir path: "${params.outputDirectory}/analysis/10_visualize_reads/",
+               pattern: "${sampleID}.krona.html",
+               mode: "copy"
+
+   input:
+   tuple val(sampleID), file(classifications) from classified_reads
+
+   output:
+   file "${sampleID}.krona.html"
+
+    """
+    ImportTaxonomy.pl \
+    -m 3 -t 5 \
+    $classifications \
+    -o ${sampleID}.krona.html
+    """
 }

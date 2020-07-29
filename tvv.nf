@@ -25,6 +25,13 @@
 
    nextflow run tvv_dsRNAseq_analysis.nf --reads "data/*R{1,2}.fastq.gz"
 
+   acceptable '--reads' formatting:
+     "*R{1,2}.fastq"
+     "sample*R{1,2}.fastq"
+     "directory/*R{1,2}.fastq"
+     "directory/sample*R{1,2}.fastq"
+     (any of the above plus ".gz")
+
    optional parameters:
    --outputDirectory "output/dir/"
    --diamondDB "path/to/db"
@@ -74,7 +81,7 @@ process depletePhiX {
     tuple val(sampleID), \
           file("${sampleID}*R1.fq.gz"), \
           file("${sampleID}*R2.fq.gz") \
-    into phiX_depleted_reads and cleaned_reads_for_classification
+    into phiX_depleted_reads //and cleaned_reads_for_classification
 
     """
     bash depletePhiX.sh \
@@ -90,7 +97,9 @@ process mapToTVV {
     tuple val(sampleID), file(forward_reads), file(reverse_reads) from phiX_depleted_reads
 
     output:
-    file "${sampleID}_*fq" into binned_tvv, binned_tvv_fastq
+    file "${sampleID}_*fq" into binned_tvv_fastq
+    file "${sampleID}_*R1.fq" into binned_forward_reads
+    file "${sampleID}_*R2.fq" into binned_reverse_reads
 
     """
     bash mapToTVV.sh \
@@ -98,13 +107,25 @@ process mapToTVV {
     """
 }
 
-// Wrangle all six (one per TVV species + satellites) files from binned_tvv & binned_tvv_fastq
-binned_tvv = binned_tvv.flatten()
-             .map { file -> tuple(file.simpleName, file)}
 
+// ---------------------------------------------------------------------------------------------- //
+// Wrangle all six (one per TVV species + satellites) files from binned_tvv & binned_tvv_fastq
+// ---------------------------------------------------------------------------------------------- //
+
+// Identify the TVV viral each file is binned to
+binned_forward_reads = binned_forward_reads.flatten()
+                       .map { file -> tuple(file.simpleName, file) }
+binned_reverse_reads = binned_reverse_reads.flatten()
+                       .map { file -> tuple(file.simpleName, file) }
+
+// Match the corresponding forward and reverse reads
+binned_tvv = binned_forward_reads.combine(binned_reverse_reads, by: 0)
+
+// For FASTA conversion, no pair matching is required
 binned_tvv_fastq = binned_tvv_fastq.flatten()
                    .map { file -> tuple(file.simpleName, file)}
 
+// ---------------------------------------------------------------------------------------------- //
 
 process fastqToFasta {
     publishDir "${params.outputDirectory}/analysis/03_binned_reads/fasta/", mode: "copy"
@@ -113,10 +134,10 @@ process fastqToFasta {
     tuple val(sample_and_tvv_species), file(fastq) from binned_tvv_fastq
 
     output:
-    file "${sample_and_tvv_species}.fasta"
+    file "*.fasta"
 
     """
-    seqtk seq -A $fastq > "${sample_and_tvv_species}.fasta"
+    seqtk seq -A $fastq > "${fastq.baseName}.fasta"
     """
 }
 
@@ -131,19 +152,20 @@ process deNovoAssembly {
                mode: "copy"
 
     input:
-    tuple val(sample_and_tvv_species), file(reads) from binned_tvv
+    tuple val(sample_and_tvv_species), file(forward_reads), file(reverse_reads) from binned_tvv
 
     output:
     tuple val(sample_and_tvv_species), \
           file("${sample_and_tvv_species}.transcripts.fasta"), \
-          file(reads) \
+          file(forward_reads), \
+          file(reverse_reads) \
     into tvv_contigs
 
     """
     # Build contigs with rnaSPAdes & drop any short contigs <300 nt;
     # if no contigs can be built that TVV species, output an empty file
 
-    rnaspades.py -s $reads -o "${sample_and_tvv_species}/" && \
+    rnaspades.py -1 $forward_reads -2 $reverse_reads -o "${sample_and_tvv_species}/" && \
     seqtk seq -L 300 "${sample_and_tvv_species}/transcripts.fasta" > \
                      "${sample_and_tvv_species}/transcripts.trimmed.fasta" && \
     mv "${sample_and_tvv_species}/transcripts.trimmed.fasta" \
@@ -192,18 +214,20 @@ process refineContigs {
     input:
     tuple val(sample_and_tvv_species), \
           file(contigs), \
-          file(reads) \
+          file(forward_reads), \
+          file(reverse_reads) \
     from tvv_contigs.filter { it.get(1).size() > 0 }
 
     output:
     tuple val(sample_and_tvv_species), \
           file("${sample_and_tvv_species}.refined_contigs.fasta.gz"), \
-          file(reads) \
+          file(forward_reads),
+          file(reverse_reads) \
     into refined_contigs, refined_contigs_and_reads_for_coverage
 
     """
     bash refineContigs.sh  \
-    -s "${sample_and_tvv_species}" -r $reads -c $contigs -o "./" -t $params.threads
+    -s "${sample_and_tvv_species}" -f $forward_reads -r $reverse_reads -c $contigs -o "./" -t $task.cpus
     """
 }
 
@@ -217,7 +241,8 @@ process coverage {
     input:
     tuple val(sample_and_tvv_species), \
           file(refined_contigs), \
-          file(reads) \
+          file(forward_reads),
+          file(reverse_reads) \
     from refined_contigs_and_reads_for_coverage
 
     output:
@@ -231,8 +256,8 @@ process coverage {
     bwa index -p "${sample_and_tvv_species}_index" $refined_contigs
 
     # Map reads to contigs with BWA-mem
-    bwa mem -t $params.threads "${sample_and_tvv_species}_index" $reads | \
-    samtools sort --threads $params.threads -o "${sample_and_tvv_species}.mapped.bam"
+    bwa mem -t $task.cpus "${sample_and_tvv_species}_index" $forward_reads $reverse_reads | \
+    samtools sort --threads $task.cpus -o "${sample_and_tvv_species}.mapped.bam"
 
     # Calculate the mean-depth (i.e., coverage) per contig; keep each contig's name & coverage; throw away header; sort by coverage
     samtools coverage "${sample_and_tvv_species}.mapped.bam" | \
@@ -274,7 +299,7 @@ process classification {
     --top 0 \
     --block-size $params.blockSize \
     --index-chunks 2 \
-    --threads $params.threads
+    --threads $task.cpus
 
     """
 }

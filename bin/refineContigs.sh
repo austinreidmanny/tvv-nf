@@ -25,13 +25,16 @@ usage() { echo -e "\nERROR: Missing sample name (needed for naming files) or inp
         }
 
 # Make sure the pipeline is invoked correctly, with project and sample names
-while getopts "s:r:c:o:t:" arg; do
+while getopts "s:f:r:c:o:t:" arg; do
         case ${arg} in
                 s ) # Take in the sample name for naming
                   sample=${OPTARG}
                         ;;
+                f ) # path to forward reads fastq
+                  forward_reads=${OPTARG}
+                        ;;
                 r ) # path to forward reads fastq
-                  reads=${OPTARG}
+                  reverse_reads=${OPTARG}
                         ;;
                 c ) # path to reverse reads fastq
                   contigs=${OPTARG}
@@ -50,7 +53,7 @@ done
 shift $(( OPTIND-1 ))
 
 # Check that required parameters are provided
-if [[ -z "${sample}" ]] || [[ -z "${reads}" ]] || [[ -z "${contigs}" ]]; then
+if [[ -z "${sample}" ]] || [[ -z "${forward_reads}" ]] || [[ -z "${reverse_reads}" ]] || [[ -z "${contigs}" ]]; then
     usage
 fi
 
@@ -123,7 +126,7 @@ function refinement () {
      bwa mem \
      -t $threads \
      "${output_directory}/${sample}_contigs_index" \
-     $reads > \
+     $forward_reads $reverse_reads > \
      "${output_directory}/${sample}.reads_mapped_to_contigs.sam"
 
     # Get summary stats of the mapping

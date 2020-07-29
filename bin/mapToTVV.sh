@@ -127,7 +127,7 @@ function mapping () {
         in1=$forward_reads \
         in2=$reverse_reads \
         ref="${tvv1},${tvv2},${tvv3},${tvv4},${tvv5},${tvv_satellites}" \
-        basename="${sample}_%.fq" \
+        basename="${sample}_%.R#.fq" \
         outu="${sample}_unmapped-reads.fq" \
         ambig2=best \
         1>> "${sample}.mapToTVV.log" \

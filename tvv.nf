@@ -81,7 +81,7 @@ process depletePhiX {
     tuple val(sampleID), \
           file("${sampleID}*R1.fq.gz"), \
           file("${sampleID}*R2.fq.gz") \
-    into phiX_depleted_reads //and cleaned_reads_for_classification
+    into phiX_depleted_reads and cleaned_reads_for_classification
 
     """
     bash depletePhiX.sh \

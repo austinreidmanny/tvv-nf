@@ -81,7 +81,7 @@ process depletePhiX {
     tuple val(sampleID), \
           file("${sampleID}*R1.fq.gz"), \
           file("${sampleID}*R2.fq.gz") \
-    into phiX_depleted_reads and cleaned_reads_for_classification
+    into phiX_depleted_reads, cleaned_reads_for_classification
 
     """
     bash depletePhiX.sh \
@@ -372,38 +372,18 @@ process classifyReads {
     tuple val(sampleID), file(forward_reads), file(reverse_reads) from cleaned_reads_for_classification
 
     output:
-    tuple val(sampleID), file("${sampleID}.kraken-report.txt") into classified_reads
+    file "${sampleID}.kraken-report.txt"
 
     """
     kraken2 \
-    --db $krakenDB \
+    --db $params.krakenDB \
     --paired --gzip-compressed --memory-mapping \
     --threads 8 \
-    --output ${sample}.kraken-output.txt \
-    --report ${sample}.kraken-report.txt \
+    --output ${sampleID}.kraken-output.txt \
+    --report ${sampleID}.kraken-report.txt \
     $forward_reads \
     $reverse_reads
     """
 
 }
 
-process visualizeReads {
-    // Visualize the classification of the reads from the 'classifyReads' process
-
-    publishDir path: "${params.outputDirectory}/analysis/10_visualize_reads/",
-               pattern: "${sampleID}.krona.html",
-               mode: "copy"
-
-   input:
-   tuple val(sampleID), file(classifications) from classified_reads
-
-   output:
-   file "${sampleID}.krona.html"
-
-    """
-    ImportTaxonomy.pl \
-    -m 3 -t 5 \
-    $classifications \
-    -o ${sampleID}.krona.html
-    """
-}

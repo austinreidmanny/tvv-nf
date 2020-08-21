@@ -23,7 +23,7 @@
    ------------------------------------------------------------------------------------------------
    Usage:
 
-   nextflow run tvv.nf --reads "data/*R{1,2}.fastq.gz"
+   nextflow run tvv_dsRNAseq_analysis.nf --reads "data/*R{1,2}.fastq.gz"
 
    acceptable '--reads' formatting:
      "*R{1,2}.fastq"
@@ -39,6 +39,7 @@
    --blockSize "#" [for DIAMOND, should be approx 1/10 of your memory/RAM]
    --threads "#"
    --phiX "custom/path/to/phiX.fasta"
+   --tvvDirectory "custom/path/to/tvv*.fasta"
    ------------------------------------------------------------------------------------------------
    Contact:
 
@@ -265,10 +266,58 @@ process coverage {
     """
 }
 
+process classifyReads {
+    // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
+    // census of just the (lightly processed/cleaned) unassembled reads
+
+    publishDir path: "${params.outputDirectory}/analysis/07_classify_unassembled_reads/",
+               pattern: "${sampleID}.kraken-report.txt",
+               mode: "copy"
+
+    input:
+    tuple val(sampleID), file(forward_reads), file(reverse_reads) from cleaned_reads_for_classification
+
+    output:
+    tuple val(sampleID), file("${sampleID}.kraken-report.txt") into classified_reads
+
+    """
+    kraken2 \
+    --db $krakenDB \
+    --paired --gzip-compressed --memory-mapping \
+    --threads 8 \
+    --output ${sample}.kraken-output.txt \
+    --report ${sample}.kraken-report.txt \
+    $forward_reads \
+    $reverse_reads
+    """
+
+}
+
+process visualizeReads {
+    // Visualize the classification of the reads from the 'classifyReads' process
+
+    publishDir path: "${params.outputDirectory}/analysis/08_visualize_reads/",
+               pattern: "${sampleID}.krona.html",
+               mode: "copy"
+
+   input:
+   tuple val(sampleID), file(classifications) from classified_reads
+
+   output:
+   file "${sampleID}.krona.html"
+
+    """
+    ImportTaxonomy.pl \
+    -m 3 -t 5 \
+    $classifications \
+    -o ${sampleID}.krona.html
+    """
+}
+
 process classification {
 
     // Save classifications files
-    publishDir path: "${params.outputDirectory}/analysis/07_classification/",
+    publishDir path: "${params.outputDirectory}/analysis/09_classification/",
                pattern: "${sample_and_tvv_species}.classification.txt",
                mode: "copy"
 
@@ -307,7 +356,7 @@ process classification {
 process taxonomy {
 
     // Save translated classification files containing the full taxonomic lineages
-    publishDir path: "${params.outputDirectory}/analysis/08_taxonomy/",
+    publishDir path: "${params.outputDirectory}/analysis/10_taxonomy/",
                pattern: "${sample_and_tvv_species}.classification.taxonomy.txt",
                mode: "copy"
 
@@ -359,31 +408,3 @@ process taxonomy {
     """
 
 }
-
-process classifyReads {
-    // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
-    // census of just the (lightly processed/cleaned) unassembled reads
-
-    publishDir path: "${params.outputDirectory}/analysis/09_classify_unassembled_reads/",
-               pattern: "${sampleID}.kraken-report.txt",
-               mode: "copy"
-
-    input:
-    tuple val(sampleID), file(forward_reads), file(reverse_reads) from cleaned_reads_for_classification
-
-    output:
-    file "${sampleID}.kraken-report.txt"
-
-    """
-    kraken2 \
-    --db $params.krakenDB \
-    --paired --gzip-compressed --memory-mapping \
-    --threads $task.cpus \
-    --output ${sampleID}.kraken-output.txt \
-    --report ${sampleID}.kraken-report.txt \
-    $forward_reads \
-    $reverse_reads
-    """
-
-}
-

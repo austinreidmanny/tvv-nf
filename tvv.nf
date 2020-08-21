@@ -23,7 +23,7 @@
    ------------------------------------------------------------------------------------------------
    Usage:
 
-   nextflow run tvv_dsRNAseq_analysis.nf --reads "data/*R{1,2}.fastq.gz"
+   nextflow run tvv.nf --reads "data/*R{1,2}.fastq.gz"
 
    acceptable '--reads' formatting:
      "*R{1,2}.fastq"
@@ -35,10 +35,10 @@
    optional parameters:
    --outputDirectory "output/dir/"
    --diamondDB "path/to/db"
+   --krakenDB "path/to/db"
    --blockSize "#" [for DIAMOND, should be approx 1/10 of your memory/RAM]
    --threads "#"
    --phiX "custom/path/to/phiX.fasta"
-   --tvvDirectory "custom/path/to/tvv*.fasta"
    ------------------------------------------------------------------------------------------------
    Contact:
 
@@ -378,7 +378,7 @@ process classifyReads {
     kraken2 \
     --db $params.krakenDB \
     --paired --gzip-compressed --memory-mapping \
-    --threads 8 \
+    --threads $task.cpus \
     --output ${sampleID}.kraken-output.txt \
     --report ${sampleID}.kraken-report.txt \
     $forward_reads \

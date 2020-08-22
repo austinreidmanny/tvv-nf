@@ -282,11 +282,11 @@ process classifyReads {
 
     """
     kraken2 \
-    --db $krakenDB \
+    --db $params.krakenDB \
     --paired --gzip-compressed --memory-mapping \
-    --threads 8 \
-    --output ${sample}.kraken-output.txt \
-    --report ${sample}.kraken-report.txt \
+    --threads $task.cpus \
+    --output ${sampleID}.kraken-output.txt \
+    --report ${sampleID}.kraken-report.txt \
     $forward_reads \
     $reverse_reads
     """
@@ -314,7 +314,7 @@ process visualizeReads {
     """
 }
 
-process classification {
+process classifyContigs {
 
     // Save classifications files
     publishDir path: "${params.outputDirectory}/analysis/09_classification/",
@@ -353,7 +353,7 @@ process classification {
     """
 }
 
-process taxonomy {
+process taxonomyOfContigs {
 
     // Save translated classification files containing the full taxonomic lineages
     publishDir path: "${params.outputDirectory}/analysis/10_taxonomy/",

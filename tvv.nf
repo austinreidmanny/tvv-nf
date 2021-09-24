@@ -35,6 +35,7 @@
    optional parameters:
    --outputDirectory "output/dir/"
    --diamondDB "path/to/db"
+   --krakenDB "path/to/db"
    --blockSize "#" [for DIAMOND, should be approx 1/10 of your memory/RAM]
    --threads "#"
    --phiX "custom/path/to/phiX.fasta"
@@ -265,10 +266,58 @@ process coverage {
     """
 }
 
-process classification {
+process classifyReads {
+    // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
+    // census of just the (lightly processed/cleaned) unassembled reads
+
+    publishDir path: "${params.outputDirectory}/analysis/07_classify_unassembled_reads/",
+               pattern: "${sampleID}.kraken-report.txt",
+               mode: "copy"
+
+    input:
+    tuple val(sampleID), file(forward_reads), file(reverse_reads) from cleaned_reads_for_classification
+
+    output:
+    tuple val(sampleID), file("${sampleID}.kraken-report.txt") into classified_reads
+
+    """
+    kraken2 \
+    --db $params.krakenDB \
+    --paired --gzip-compressed --memory-mapping \
+    --threads $task.cpus \
+    --output ${sampleID}.kraken-output.txt \
+    --report ${sampleID}.kraken-report.txt \
+    $forward_reads \
+    $reverse_reads
+    """
+
+}
+
+process visualizeReads {
+    // Visualize the classification of the reads from the 'classifyReads' process
+
+    publishDir path: "${params.outputDirectory}/analysis/08_visualize_reads/",
+               pattern: "${sampleID}.krona.html",
+               mode: "copy"
+
+   input:
+   tuple val(sampleID), file(classifications) from classified_reads
+
+   output:
+   file "${sampleID}.krona.html"
+
+    """
+    ImportTaxonomy.pl \
+    -m 3 -t 5 \
+    $classifications \
+    -o ${sampleID}.krona.html
+    """
+}
+
+process classifyContigs {
 
     // Save classifications files
-    publishDir path: "${params.outputDirectory}/analysis/07_classification/",
+    publishDir path: "${params.outputDirectory}/analysis/09_classification/",
                pattern: "${sample_and_tvv_species}.classification.txt",
                mode: "copy"
 
@@ -280,10 +329,7 @@ process classification {
     from contigs_with_coverage.filter { it.get(0) =~/unmapped/ }
 
     output:
-    tuple val(sample_and_tvv_species), \
-          file("${sample_and_tvv_species}.classification.txt"), \
-          file(coverage) \
-    into classified_contigs
+    file "${sample_and_tvv_species}.classification.txt"
 
     """
     # Run diamond
@@ -294,98 +340,12 @@ process classification {
     --db $params.diamondDB \
     --query $refined_contigs \
     --out "${sample_and_tvv_species}.classification.txt" \
-    --outfmt 6 qseqid staxids evalue bitscore pident qcovhsp \
-    --max-hsps 1 \
-    --top 0 \
+    --outfmt 6 qseqid sseqid stitle sscinames staxids evalue bitscore pident qcovhsp \
+    --top 1 \
     --block-size $params.blockSize \
     --index-chunks 2 \
     --threads $task.cpus
-
     """
 }
 
-process taxonomy {
-
-    // Save translated classification files containing the full taxonomic lineages
-    publishDir path: "${params.outputDirectory}/analysis/08_taxonomy/",
-               pattern: "${sample_and_tvv_species}.classification.taxonomy.txt",
-               mode: "copy"
-
-   publishDir path: "${params.outputDirectory}/analysis/08_taxonomy/",
-              pattern: "${sample_and_tvv_species}.final_table.txt",
-              mode: "copy"
-
-    input:
-    tuple val(sample_and_tvv_species), file(classifications), file(coverage) from classified_contigs
-
-    output:
-    file "${sample_and_tvv_species}.final_table.txt"
-
-    """
-    # Translate the DIAMOND results to full lineages
-    diamondToTaxonomy.py $classifications
-
-    # Join the coverage values and the taxonomy results
-    join \
-        -j 1 \
-        -t \$'\t' \
-        --check-order \
-        <(sort -k1,1 $coverage) \
-        <(grep -v "^#" "${sample_and_tvv_species}.classification.taxonomy.txt" | sort -k1,1) | \
-    sort -rgk2,2 > \
-    "${sample_and_tvv_species}.contigs_coverage_taxonomy.txt"
-
-    # Make a header for a final results table
-    echo -e \
-        "#Contig\t" \
-        "#Coverage\t" \
-        "#TaxonID\t" \
-        "#e-value\t" \
-        "#Bitscore\t" \
-        "#PercentIdentity\t" \
-        "#QueryCoverage\t" \
-        "#Domain\t" \
-        "#Kingdom\t" \
-        "#Phylum\t" \
-        "#Class\t" \
-        "#Order\t" \
-        "#Family\t" \
-        "#Genus_species" \
-    > "${sample_and_tvv_species}.final_table.txt"
-
-    # Add the data to the final with just the header
-    cat "${sample_and_tvv_species}.contigs_coverage_taxonomy.txt" >> \
-        "${sample_and_tvv_species}.final_table.txt"
-    """
-
-}
-
-/*
-process classifyReads {
-    // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
-    // census of just the (lightly processed/cleaned) unassembled reads
-
-    publishDir path: "${params.outputDirectory}/analysis/09_classify_unassembled_reads/",
-               pattern: "${sampleID}.kraken-report.txt",
-               mode: "copy"
-
-    input:
-    tuple val(sampleID), file(forward_reads), file(reverse_reads) from cleaned_reads_for_classification
-
-    output:
-    file "${sampleID}.kraken-report.txt"
-
-    """
-    kraken2 \
-    --db $params.krakenDB \
-    --paired --gzip-compressed --memory-mapping \
-    --threads 8 \
-    --output ${sampleID}.kraken-output.txt \
-    --report ${sampleID}.kraken-report.txt \
-    $forward_reads \
-    $reverse_reads
-    """
-
-}
-*/
 

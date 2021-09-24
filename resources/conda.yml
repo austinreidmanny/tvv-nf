@@ -12,6 +12,7 @@ dependencies:
   - diamond
   - htslib
   - kraken2
+  - krona
   - perl
   - python>=3.7
   - requests

@@ -360,6 +360,7 @@ process taxonomy {
 
 }
 
+/*
 process classifyReads {
     // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
     // census of just the (lightly processed/cleaned) unassembled reads
@@ -386,4 +387,5 @@ process classifyReads {
     """
 
 }
+*/
 

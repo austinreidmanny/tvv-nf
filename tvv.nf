@@ -19,7 +19,6 @@
      * Conda (https://docs.conda.io/en/latest/miniconda.html)
      * DIAMOND database
      * Kraken database
-     * Krona set up (Conda will install it, but might not put it in your Bash path or initiate the taxonomy database for this)
    ------------------------------------------------------------------------------------------------
    Usage:
 
@@ -98,7 +97,7 @@ process mapToTVV {
     tuple val(sampleID), file(forward_reads), file(reverse_reads) from phiX_depleted_reads
 
     output:
-    file "${sampleID}_*fq" into binned_tvv_fastq
+    file "${sampleID}_*fq" into binned_tvv_for_fasta_conversion
     file "${sampleID}_*R1.fq" into binned_forward_reads
     file "${sampleID}_*R2.fq" into binned_reverse_reads
 
@@ -110,7 +109,7 @@ process mapToTVV {
 
 
 // ---------------------------------------------------------------------------------------------- //
-// Wrangle all six (one per TVV species + satellites) files from binned_tvv & binned_tvv_fastq
+// Wrangle all six (one per TVV species + satellites) 
 // ---------------------------------------------------------------------------------------------- //
 
 // Identify the TVV viral each file is binned to
@@ -120,11 +119,11 @@ binned_reverse_reads = binned_reverse_reads.flatten()
                        .map { file -> tuple(file.simpleName, file) }
 
 // Match the corresponding forward and reverse reads
-binned_tvv = binned_forward_reads.combine(binned_reverse_reads, by: 0)
+(binned_tvv, binned_tvv_for_assembly) = binned_forward_reads.combine(binned_reverse_reads, by: 0).into(2)
 
 // For FASTA conversion, no pair matching is required
-binned_tvv_fastq = binned_tvv_fastq.flatten()
-                   .map { file -> tuple(file.simpleName, file)}
+binned_tvv_for_fasta_conversion = binned_tvv_for_fasta_conversion.flatten()
+                                  .map { file -> tuple(file.simpleName, file)}
 
 // ---------------------------------------------------------------------------------------------- //
 
@@ -132,7 +131,7 @@ process fastqToFasta {
     publishDir "${params.outputDirectory}/analysis/03_binned_reads/fasta/", mode: "copy"
 
     input:
-    tuple val(sample_and_tvv_species), file(fastq) from binned_tvv_fastq
+    tuple val(sample_and_tvv_species), file(fastq) from binned_tvv_for_fasta_conversion
 
     output:
     file "*.fasta"
@@ -142,18 +141,87 @@ process fastqToFasta {
     """
 }
 
+// Indicate forward or reverse read in read headers by changing spaces to underscores
+process fixHeaders {
+    publishDir "${params.outputDirectory}/analysis/04_cleanup_binned_reads/01_fix_headers/", mode: "copy"
+
+    input:
+	tuple val(sample_and_tvv_species), file(forward_reads), file(reverse_reads) from binned_tvv
+
+    output:
+    tuple val(sample_and_tvv_species), file("${sample_and_tvv_species}.fixed-headers_R1.fasta.gz"), file("${sample_and_tvv_species}.fixed-headers_R2.fasta.gz") into fixed_reads
+
+    shell:
+    $/
+    seqtk seq -A $forward_reads | sed 's/^>/>R1_/g' | gzip -c > "${sample_and_tvv_species}.fixed-headers_R1.fasta.gz"
+    seqtk seq -A $reverse_reads | sed 's/^>/>R2_/g' | gzip -c > "${sample_and_tvv_species}.fixed-headers_R2.fasta.gz"
+    /$
+
+}
+
+process combineFasta {
+	publishDir "${params.outputDirectory}/analysis/04_cleanup_binned_reads/02_combine_reads/", mode: "copy"
+
+	input:
+	tuple val(sample_and_tvv_species), file(forward_reads), file(reverse_reads) from fixed_reads
+
+	output:
+	tuple val(sample_and_tvv_species), file("*.combined.fasta") into combined_fasta
+
+	"""
+	gzcat $forward_reads $reverse_reads > "${sample_and_tvv_species}.combined.fasta"
+	"""
+}
+
+process cleanupBinnedReads {
+	publishDir "${params.outputDirectory}/analysis/04_cleanup_binned_reads/03_cleaned_up/", mode: "copy"
+
+    input:
+	tuple val(sample_and_tvv_species), file(reads) from combined_fasta.filter{ name, file -> name =~ /tvv\d/ } // ignore unmapped reads
+
+	output:
+	file "*summary.txt"
+	file "*results.txt" into cleaned_results
+
+	"""
+	bash cleanup_blast.sh \
+	-i $reads -p "${workflow.launchDir}/resources/cleanup_blast/minimal_tvv_db" -o "./" -m 8 -e 1e-3
+	"""
+}
+
+process parseCleanupResults {
+	publishDir "${params.outputDirectory}/analysis/04_cleanup_binned_reads/04_parsed/", mode: "copy"
+
+    input:
+    file results from cleaned_results
+
+    output:
+    file "*parsed.txt"
+
+    """
+    bash parse_cleanup_results.sh \
+	-f $results
+    """
+
+}
+
+
+/*
+==================
+DISABLING EVERYTHING POST READ BINNING TEMPORARILY
+=========================================================================================================================================
 process deNovoAssembly {
 
     // Now that we're at the multiple TVV files per sample stage, I am going to run these scripts
     // within their own sample+species specific work directories to prevent overwriting/interference,
     // but save them all together in the same directory at the end
 
-    publishDir path: "${params.outputDirectory}/analysis/04_denovoassembly",
+    publishDir path: "${params.outputDirectory}/analysis/05_denovoassembly",
                pattern: "${sample_and_tvv_species}.transcripts.fasta",
                mode: "copy"
 
     input:
-    tuple val(sample_and_tvv_species), file(forward_reads), file(reverse_reads) from binned_tvv
+    tuple val(sample_and_tvv_species), file(forward_reads), file(reverse_reads) from binned_tvv_for_assembly
 
     output:
     tuple val(sample_and_tvv_species), \
@@ -192,22 +260,22 @@ process refineContigs {
     // what is shown by a pileup of the reads themselves
 
     // Save the refined TVV contigs
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
+    publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
                pattern: "${sample_and_tvv_species}.refined_contigs.fasta.gz",
                mode: "copy"
 
    // Save the variants-called bcf file
-   publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
+   publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
               pattern: "${sample_and_tvv_species}.variants_called.bcf",
               mode: "copy"
 
     // Save the BAM file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
+    publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
                pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.bam",
                mode: "copy"
 
     // Save the mapping-statistics file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/05_refinement/",
+    publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
               pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.stats",
               mode: "copy"
 
@@ -235,7 +303,7 @@ process refineContigs {
 // Map the reads to the contigs to determine per-contig coverage
 process coverage {
 
-    publishDir path: "${params.outputDirectory}/analysis/06_coverage/",
+    publishDir path: "${params.outputDirectory}/analysis/07_coverage/",
                pattern: "${sample_and_tvv_species}.contigs_coverage.txt",
                mode: "copy"
 
@@ -270,7 +338,7 @@ process classifyReads {
     // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
     // census of just the (lightly processed/cleaned) unassembled reads
 
-    publishDir path: "${params.outputDirectory}/analysis/07_classify_unassembled_reads/",
+    publishDir path: "${params.outputDirectory}/analysis/08_classify_unassembled_reads/",
                pattern: "${sampleID}.kraken-report.txt",
                mode: "copy"
 
@@ -278,7 +346,7 @@ process classifyReads {
     tuple val(sampleID), file(forward_reads), file(reverse_reads) from cleaned_reads_for_classification
 
     output:
-    tuple val(sampleID), file("${sampleID}.kraken-report.txt") into classified_reads
+    file "${sampleID}.kraken-report.txt"
 
     """
     kraken2 \
@@ -293,31 +361,10 @@ process classifyReads {
 
 }
 
-process visualizeReads {
-    // Visualize the classification of the reads from the 'classifyReads' process
-
-    publishDir path: "${params.outputDirectory}/analysis/08_visualize_reads/",
-               pattern: "${sampleID}.krona.html",
-               mode: "copy"
-
-   input:
-   tuple val(sampleID), file(classifications) from classified_reads
-
-   output:
-   file "${sampleID}.krona.html"
-
-    """
-    ImportTaxonomy.pl \
-    -m 3 -t 5 \
-    $classifications \
-    -o ${sampleID}.krona.html
-    """
-}
-
 process classifyContigs {
 
     // Save classifications files
-    publishDir path: "${params.outputDirectory}/analysis/09_classification/",
+    publishDir path: "${params.outputDirectory}/analysis/09_classify_assemblies/",
                pattern: "${sample_and_tvv_species}.classification.txt",
                mode: "copy"
 
@@ -348,4 +395,5 @@ process classifyContigs {
     """
 }
 
+*/
 

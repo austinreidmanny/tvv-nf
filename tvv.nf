@@ -109,7 +109,7 @@ process mapToTVV {
 
 
 // ---------------------------------------------------------------------------------------------- //
-// Wrangle all six (one per TVV species + satellites) 
+// Wrangle all six (one per TVV species + satellites)
 // ---------------------------------------------------------------------------------------------- //
 
 // Identify the TVV viral each file is binned to
@@ -177,20 +177,22 @@ process cleanupBinnedReads {
 	publishDir "${params.outputDirectory}/analysis/04_cleanup_binned_reads/03_cleaned_up/", mode: "copy"
 
     input:
-	tuple val(sample_and_tvv_species), file(reads) from combined_fasta.filter{ name, file -> name =~ /tvv\d/ } // ignore unmapped reads
+  	tuple val(sample_and_tvv_species), file(reads) from combined_fasta.filter{ name, file -> name =~ /tvv\d/ } // ignore unmapped reads
 
-	output:
-	file "*summary.txt"
-	file "*results.txt" into cleaned_results
+  	output:
+  	file "*summary.txt"
+  	file "*results.txt" into cleaned_results
 
-	"""
-	bash cleanup_blast.sh \
-	-i $reads -p "${workflow.launchDir}/resources/cleanup_blast/minimal_tvv_db" -o "./" -m 8 -e 1e-3
-	"""
+  	"""
+  	bash cleanup_blast.sh \
+  	-i $reads -p "${workflow.launchDir}/resources/cleanup_blast/minimal_tvv_db" -o "./" -m 8 -e 1e-3
+	   """
 }
 
+
+
 process parseCleanupResults {
-	publishDir "${params.outputDirectory}/analysis/04_cleanup_binned_reads/04_parsed/", mode: "copy"
+    publishDir "${params.outputDirectory}/analysis/04_cleanup_binned_reads/04_parsed/", mode: "copy"
 
     input:
     file results from cleaned_results
@@ -205,11 +207,6 @@ process parseCleanupResults {
 
 }
 
-
-/*
-==================
-DISABLING EVERYTHING POST READ BINNING TEMPORARILY
-=========================================================================================================================================
 process deNovoAssembly {
 
     // Now that we're at the multiple TVV files per sample stage, I am going to run these scripts
@@ -222,115 +219,68 @@ process deNovoAssembly {
 
     input:
     tuple val(sample_and_tvv_species), file(forward_reads), file(reverse_reads) from binned_tvv_for_assembly
+        .filter{ name, fwd_reads_file, rev_reads_file -> name =~ /unmapped/ } // only assemble non-TVV reads
 
     output:
-    tuple val(sample_and_tvv_species), \
-          file("${sample_and_tvv_species}.transcripts.fasta"), \
-          file(forward_reads), \
-          file(reverse_reads) \
-    into tvv_contigs
+    tuple val(sample_and_tvv_species), file("${sample_and_tvv_species}.transcripts.fasta") into tvv_contigs
 
     """
+    # --------------------------------------------------------------------------
     # Build contigs with rnaSPAdes & drop any short contigs <300 nt;
     # if no contigs can be built that TVV species, output an empty file
+    # --------------------------------------------------------------------------
 
-    rnaspades.py -1 $forward_reads -2 $reverse_reads -o "${sample_and_tvv_species}/" && \
-    seqtk seq -L 300 "${sample_and_tvv_species}/transcripts.fasta" > \
-                     "${sample_and_tvv_species}/transcripts.trimmed.fasta" && \
-    mv "${sample_and_tvv_species}/transcripts.trimmed.fasta" \
-       "${sample_and_tvv_species}/transcripts.fasta" || \
-    touch "${sample_and_tvv_species}/transcripts.fasta"
+    # SPAdes does not play well with caching, will terminate if any files are in the output directory, so if it exists, just delete it
+    rm -R "spades-output/" || true
 
-    # If rnaSPAdes partially succeeds (can only make low-quality contigs), it will end silently without providing a transcripts file
-    if [[ ! -f "./${sample_and_tvv_species}/transcripts.fasta" ]]; then
-        mkdir -p "./${sample_and_tvv_species}/"
-        touch "./${sample_and_tvv_species}/transcripts.fasta"
-    fi
+    # Run SPAdes
+    rnaspades.py -1 $forward_reads -2 $reverse_reads -o "spades-output/" --threads $task.cpus && \
+        seqtk seq -L 300 "spades-output/transcripts.fasta" > "transcripts.trimmed.fasta" && \
+        mv "transcripts.trimmed.fasta" "transcripts.fasta" || \
+    touch "transcripts.fasta"
 
-    # Rename transcripts file to include sample name & move into main folder
-    mv "${sample_and_tvv_species}/transcripts.fasta" "${sample_and_tvv_species}.transcripts.fasta"
+    # Rename transcripts file to include sample name
+    mv "transcripts.fasta" "${sample_and_tvv_species}.transcripts.fasta"
     """
+
 }
 
-process refineContigs {
+process classifyContigs {
 
-    // Map the TVV-reads to the denovo-assembled-contigs with BWA;
-    // with the reads mapped to their denovo-assemblies, refine the assembly by
-    // finding any mismatches where rnaSPAdes called something different than
-    // what is shown by a pileup of the reads themselves
-
-    // Save the refined TVV contigs
-    publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
-               pattern: "${sample_and_tvv_species}.refined_contigs.fasta.gz",
+    // Save classifications files
+    publishDir path: "${params.outputDirectory}/analysis/06_classify_assemblies/",
+               pattern: "${sample_and_tvv_species}.classification*txt",
                mode: "copy"
 
-   // Save the variants-called bcf file
-   publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
-              pattern: "${sample_and_tvv_species}.variants_called.bcf",
-              mode: "copy"
-
-    // Save the BAM file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
-               pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.bam",
-               mode: "copy"
-
-    // Save the mapping-statistics file with the name of the TVV species
-    publishDir path: "${params.outputDirectory}/analysis/06_refinement/",
-              pattern: "${sample_and_tvv_species}.reads_mapped_to_contigs.sorted.stats",
-              mode: "copy"
-
-    // Only read in the files for TVV species where rnaSPAdes could actually construct contigs
+    // Take in refined contigs and reads files only if it's from the unmapped read/contigs
     input:
-    tuple val(sample_and_tvv_species), \
-          file(contigs), \
-          file(forward_reads), \
-          file(reverse_reads) \
-    from tvv_contigs.filter { it.get(1).size() > 0 }
+    tuple val(sample_and_tvv_species), file(contigs) from tvv_contigs
 
     output:
-    tuple val(sample_and_tvv_species), \
-          file("${sample_and_tvv_species}.refined_contigs.fasta.gz"), \
-          file(forward_reads),
-          file(reverse_reads) \
-    into refined_contigs, refined_contigs_and_reads_for_coverage
+    file "${sample_and_tvv_species}.classification.txt"
+    file "${sample_and_tvv_species}.classification.taxonomy.txt"
 
     """
-    bash refineContigs.sh  \
-    -s "${sample_and_tvv_species}" -f $forward_reads -r $reverse_reads -c $contigs -o "./" -t $task.cpus
-    """
-}
+    # --------------------------------------------------------------------------
+    # Run diamond
+    # --------------------------------------------------------------------------
+    diamond \
+    blastx \
+    --verbose \
+    --more-sensitive \
+    --db $params.diamondDB \
+    --query $contigs \
+    --out "${sample_and_tvv_species}.classification.txt" \
+    --outfmt 6 qseqid sseqid stitle sscinames staxids evalue bitscore pident qcovhsp \
+    --top 1 \
+    --block-size $params.blockSize \
+    --index-chunks 2 \
+    --threads $task.cpus
 
-// Map the reads to the contigs to determine per-contig coverage
-process coverage {
-
-    publishDir path: "${params.outputDirectory}/analysis/07_coverage/",
-               pattern: "${sample_and_tvv_species}.contigs_coverage.txt",
-               mode: "copy"
-
-    input:
-    tuple val(sample_and_tvv_species), \
-          file(refined_contigs), \
-          file(forward_reads),
-          file(reverse_reads) \
-    from refined_contigs_and_reads_for_coverage
-
-    output:
-    tuple val(sample_and_tvv_species), \
-          file(refined_contigs), \
-          file("${sample_and_tvv_species}.contigs_coverage.txt") \
-    into contigs_with_coverage
-
-    """
-    # Index contigs for BWA
-    bwa index -p "${sample_and_tvv_species}_index" $refined_contigs
-
-    # Map reads to contigs with BWA-mem
-    bwa mem -t $task.cpus "${sample_and_tvv_species}_index" $forward_reads $reverse_reads | \
-    samtools sort --threads $task.cpus -o "${sample_and_tvv_species}.mapped.bam"
-
-    # Calculate the mean-depth (i.e., coverage) per contig; keep each contig's name & coverage; throw away header; sort by coverage
-    samtools coverage "${sample_and_tvv_species}.mapped.bam" | \
-    cut -f 1,7 > "${sample_and_tvv_species}.contigs_coverage.txt"
+    # --------------------------------------------------------------------------
+    # Convert taxonomy IDs to useful lineages
+    # --------------------------------------------------------------------------
+    diamondToTaxonomy.py "${sample_and_tvv_species}.classification.txt"
     """
 }
 
@@ -338,7 +288,7 @@ process classifyReads {
     // Now that the contigs are assembled and classified, I would like to also do a metatranscriptomic
     // census of just the (lightly processed/cleaned) unassembled reads
 
-    publishDir path: "${params.outputDirectory}/analysis/08_classify_unassembled_reads/",
+    publishDir path: "${params.outputDirectory}/analysis/07_classify_reads/",
                pattern: "${sampleID}.kraken-report.txt",
                mode: "copy"
 
@@ -360,40 +310,3 @@ process classifyReads {
     """
 
 }
-
-process classifyContigs {
-
-    // Save classifications files
-    publishDir path: "${params.outputDirectory}/analysis/09_classify_assemblies/",
-               pattern: "${sample_and_tvv_species}.classification.txt",
-               mode: "copy"
-
-    // Take in refined contigs and reads files only if it's from the unmapped read/contigs
-    input:
-    tuple val(sample_and_tvv_species), \
-          file(refined_contigs),  \
-          file(coverage) \
-    from contigs_with_coverage.filter { it.get(0) =~/unmapped/ }
-
-    output:
-    file "${sample_and_tvv_species}.classification.txt"
-
-    """
-    # Run diamond
-    diamond \
-    blastx \
-    --verbose \
-    --more-sensitive \
-    --db $params.diamondDB \
-    --query $refined_contigs \
-    --out "${sample_and_tvv_species}.classification.txt" \
-    --outfmt 6 qseqid sseqid stitle sscinames staxids evalue bitscore pident qcovhsp \
-    --top 1 \
-    --block-size $params.blockSize \
-    --index-chunks 2 \
-    --threads $task.cpus
-    """
-}
-
-*/
-

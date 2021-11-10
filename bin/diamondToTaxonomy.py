@@ -19,9 +19,9 @@ with open(inf, "r") as input:
 	for line in input:
 		line = line.strip()
 		line_arr = line.split()
-		if len(line_arr) != 6:
+		if len(line_arr) != 3:
 			print("WARNING: Diamond file should have the following format:")
-			print("'{}\t{}\t{}\t{}\t{}\t{}'.format('sequence_name', 'taxonID', 'evalue', 'bitscore', 'percent_identity', 'query_coverage')")
+			print("'{}\t{}\t{}'.format('sequence_name', 'taxonID', 'evalue')")
 			print("Continuing to next line...")
 		break
 
@@ -65,7 +65,7 @@ with open(inf, "r") as input, \
 
 		# For each sequence, split it into an array and name each item
 		line_arr = line.split()
-		if len(line_arr) != 6:
+		if len(line_arr) != 3:
 			print("Line does not contain all required fields")
 			print("Offending line: %s" % line_arr)
 			continue
@@ -74,9 +74,6 @@ with open(inf, "r") as input, \
 			contig_name = str(line_arr[0])
 			taxid = str(line_arr[1])
 			evalue = str(line_arr[2])
-			bitscore = str(line_arr[3])
-			percentid = str(line_arr[4])
-			querycov = str(line_arr[5])
 
 		# Split the taxonomy result by rank
 		taxonomy = taxid_translator[taxid]
@@ -129,8 +126,8 @@ with open(inf, "r") as input, \
 
 		# Write it all to a new file
 		output.write("\t".join((contig_name, taxid, evalue, \
-					bitscore, percentid, querycov, \
 					superkingdom, kingdom, phylum, classs, \
 					order, family, genus, genus_species)))
 
 		output.write("\n")
+ 

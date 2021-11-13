@@ -169,7 +169,7 @@ process combineFasta {
 	tuple val(sample_and_tvv_species), file("*.combined.fasta") into combined_fasta
 
 	"""
-	gzcat $forward_reads $reverse_reads > "${sample_and_tvv_species}.combined.fasta"
+	zcat $forward_reads $reverse_reads > "${sample_and_tvv_species}.combined.fasta"
 	"""
 }
 
@@ -271,7 +271,7 @@ process classifyContigs {
     --db $params.diamondDB \
     --query $contigs \
     --out "${sample_and_tvv_species}.classification.txt" \
-    --outfmt 6 qseqid sseqid stitle sscinames staxids evalue bitscore pident qcovhsp \
+    --outfmt 102 \
     --top 1 \
     --block-size $params.blockSize \
     --index-chunks 2 \
